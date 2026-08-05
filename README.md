@@ -8,10 +8,10 @@ Aplikasi web untuk filter dan bandingkan Back Order dari data **PSC** dan **SAP 
 
 Pilih salah satu mode:
 
-| Mode | Keterangan |
-|------|------------|
+| Mode          | Keterangan                                                             |
+| ------------- | ---------------------------------------------------------------------- |
 | Folder server | Membaca semua `.xlsx` / `.xls` di `data-psc` & `data-sap-zmmm_open_bo` |
-| Upload | User mengunggah file PSC & SAP dari browser |
+| Upload        | User mengunggah file PSC & SAP dari browser                            |
 
 ### 2. Filter PSC — Sales Office
 
@@ -47,11 +47,11 @@ Pilih salah satu mode:
 
 Setiap proses **menimpa** file tetap di `output/` (hasil sebelumnya diganti):
 
-| File | Isi |
-|------|-----|
-| `compare.xlsx` | Sheet: **combined**, matched, only_psc, only_sap |
-| `psc_so_unique.xlsx` | Unique SO dari PSC |
-| `sap_sales_document_unique.xlsx` | Unique Sales document dari SAP |
+| File                             | Isi                                              |
+| -------------------------------- | ------------------------------------------------ |
+| `compare.xlsx`                   | Sheet: **combined**, matched, only_psc, only_sap |
+| `psc_so_unique.xlsx`             | Unique SO dari PSC                               |
+| `sap_sales_document_unique.xlsx` | Unique Sales document dari SAP                   |
 
 ---
 
@@ -61,10 +61,10 @@ Setiap proses **menimpa** file tetap di `output/` (hasil sebelumnya diganti):
 
 Pilih salah satu mode:
 
-| Mode | Keterangan |
-|------|------------|
-| Folder server | Membaca semua `.xlsx` / `.xls` di `data-partviz` |
-| Upload | User mengunggah multiple file PartViz dari browser |
+| Mode          | Keterangan                                         |
+| ------------- | -------------------------------------------------- |
+| Folder server | Membaca semua `.xlsx` / `.xls` di `data-partviz`   |
+| Upload        | User mengunggah multiple file PartViz dari browser |
 
 ### 2. Gabungkan & urutkan
 
@@ -83,8 +83,8 @@ Pilih salah satu mode:
 
 Setiap proses **menimpa** file tetap di `output/`:
 
-| File | Isi |
-|------|-----|
+| File                  | Isi                                                       |
+| --------------------- | --------------------------------------------------------- |
 | `partviz_merged.xlsx` | Semua baris PartViz, sudah digabung & diurutkan milestone |
 
 ---
@@ -93,10 +93,10 @@ Setiap proses **menimpa** file tetap di `output/`:
 
 ### 1. Sumber data
 
-| Mode | Keterangan |
-|------|------------|
+| Mode          | Keterangan                                                                  |
+| ------------- | --------------------------------------------------------------------------- |
 | Folder server | Membaca semua `.xlsx` / `.xls` di `data-sap-zvsd_parts_progress-order_item` |
-| Upload | User mengunggah multiple file Order Item dari browser |
+| Upload        | User mengunggah multiple file Order Item dari browser                       |
 
 ### 2. Gabungkan & hitung
 
@@ -111,8 +111,8 @@ Setiap proses **menimpa** file tetap di `output/`:
 
 Setiap proses menimpa file tetap berikut:
 
-| File | Isi |
-|------|-----|
+| File                                 | Isi                                                                         |
+| ------------------------------------ | --------------------------------------------------------------------------- |
 | `order_item_price_per_material.xlsx` | Data Order Item lengkap dengan kolom `Source File` dan `Price per Material` |
 
 ---
@@ -121,23 +121,25 @@ Setiap proses menimpa file tetap berikut:
 
 ### 1. Sumber data
 
-| Mode | Keterangan |
-|------|------------|
+| Mode          | Keterangan                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------- |
 | Folder server | Membaca multiple Excel di `data-sap-zvsd_parts_progress-source_item` dan `data-sap-zvsd_parts_progress` |
-| Upload | User mengunggah multiple file Source Item dan Parts Progress dari browser |
+| Upload        | User mengunggah multiple file Source Item dan Parts Progress dari browser                               |
 
 ### 2. Filter & remove duplicate
 
 1. Gabungkan semua file Source Item.
 2. Ambil kolom `Purchasing Document`.
 3. Buang nilai kosong dan remove duplicate.
-4. File Parts Progress dibaca dan divalidasi sebagai dataset pasangan; kolom `Purchasing Document` hanya tersedia di Source Item.
+4. Filter baris dengan `Reason for rejection` kosong.
+5. Ambil kolom `Material`, buang nilai kosong, lalu remove duplicate.
+6. File Parts Progress dibaca dan divalidasi sebagai dataset pasangan; kolom `Purchasing Document` hanya tersedia di Source Item.
 
 ### 3. Download hasil
 
-| File | Isi |
-|------|-----|
-| `purchasing_document_unique.xlsx` | Daftar `Purchasing Document` unik dari Source Item |
+| File                              | Isi                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `purchasing_document_unique.xlsx` | Sheet `Purchasing Document` unik dan sheet `Material` unik dengan `Reason for rejection` kosong |
 
 Setiap proses menimpa file hasil sebelumnya.
 
@@ -208,30 +210,30 @@ Pastikan semua folder data yang tercantum pada struktur di atas berisi file Exce
 
 ### PSC × SAP
 
-| Field | Default | Keterangan |
-|------|---------|------------|
-| Sales Office (PSC) | `0G38` | Filter PSC |
-| Plant (SAP) | `1G38` | Filter SAP; multi value OK |
+| Field               | Default              | Keterangan                                |
+| ------------------- | -------------------- | ----------------------------------------- |
+| Sales Office (PSC)  | `0G38`               | Filter PSC                                |
+| Plant (SAP)         | `1G38`               | Filter SAP; multi value OK                |
 | Exclude part number | `DELIVERY_CHARGE:ZZ` | Exclude `Material No` SAP; multi value OK |
-| Sumber data | Folder server | Folder atau upload Excel |
+| Sumber data         | Folder server        | Folder atau upload Excel                  |
 
 ### PartViz
 
-| Field | Default | Keterangan |
-|------|---------|------------|
-| Sumber data | Folder server | `data-partviz` atau upload multiple Excel |
-| Urutan Milestone | tetap | Cancelled → Griefed → ESD Needed → Future Dated → ESD Available → Sourced → Shipped |
+| Field            | Default       | Keterangan                                                                          |
+| ---------------- | ------------- | ----------------------------------------------------------------------------------- |
+| Sumber data      | Folder server | `data-partviz` atau upload multiple Excel                                           |
+| Urutan Milestone | tetap         | Cancelled → Griefed → ESD Needed → Future Dated → ESD Available → Sourced → Shipped |
 
 ### Order Item Price
 
-| Field | Default | Keterangan |
-|------|---------|------------|
+| Field       | Default       | Keterangan                                                           |
+| ----------- | ------------- | -------------------------------------------------------------------- |
 | Sumber data | Folder server | `data-sap-zvsd_parts_progress-order_item` atau upload multiple Excel |
-| Rumus | tetap | `(Parts Selling Price - ABS(Discount Total)) / Order Quantity` |
+| Rumus       | tetap         | `(Parts Selling Price - ABS(Discount Total)) / Order Quantity`       |
 
 ### Parts Progress Source Item
 
-| Field | Default | Keterangan |
-|------|---------|------------|
+| Field       | Default       | Keterangan                                                               |
+| ----------- | ------------- | ------------------------------------------------------------------------ |
 | Sumber data | Folder server | Dua folder server atau upload multiple Excel untuk masing-masing dataset |
-| Output | tetap | Unique `Purchasing Document` dari Source Item |
+| Output      | tetap         | Unique `Purchasing Document` dan unique `Material` (rejection blank)     |

@@ -62,10 +62,12 @@ export type ProgressSourceProcessResponse = {
   source_item_row_count: number;
   parts_progress_row_count: number;
   purchasing_document_count: number;
+  material_count: number;
   source_item_files: string[];
   parts_progress_files: string[];
   downloads: Record<string, string>;
   preview: string[];
+  material_preview: string[];
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";

@@ -93,10 +93,12 @@ class ProgressSourceProcessResponse(BaseModel):
     source_item_row_count: int
     parts_progress_row_count: int
     purchasing_document_count: int
+    material_count: int
     source_item_files: list[str]
     parts_progress_files: list[str]
     downloads: dict[str, str]
     preview: list[str] = Field(default_factory=list)
+    material_preview: list[str] = Field(default_factory=list)
 
 
 @router.get("/health")
@@ -382,7 +384,11 @@ async def process_progress_source(
                 )
             source_item_frames = await _read_uploads(
                 source_item_files,
-                usecols=["Purchasing Document"],
+                usecols=[
+                    "Purchasing Document",
+                    "Material",
+                    "Reason for rejection",
+                ],
             )
             parts_progress_frames = await _read_uploads(
                 parts_progress_files,
@@ -413,7 +419,11 @@ async def process_progress_source(
                     path.name,
                     read_excel_source(
                         path,
-                        usecols=["Purchasing Document"],
+                        usecols=[
+                            "Purchasing Document",
+                            "Material",
+                            "Reason for rejection",
+                        ],
                     ),
                 )
                 for path in source_item_paths
@@ -450,10 +460,12 @@ async def process_progress_source(
         source_item_row_count=result.source_item_row_count,
         parts_progress_row_count=result.parts_progress_row_count,
         purchasing_document_count=result.purchasing_document_count,
+        material_count=result.material_count,
         source_item_files=result.source_item_files,
         parts_progress_files=result.parts_progress_files,
         downloads=downloads,
         preview=result.preview,
+        material_preview=result.material_preview,
     )
 
 

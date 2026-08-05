@@ -463,10 +463,12 @@ class ProgressSourceResult:
     source_item_row_count: int
     parts_progress_row_count: int
     purchasing_document_count: int
+    material_count: int
     source_item_files: list[str]
     parts_progress_files: list[str]
     files: dict[str, Path]
     preview: list[str]
+    material_preview: list[str]
 
 
 def process_progress_source_dataframes(
@@ -498,21 +500,51 @@ def process_progress_source_dataframes(
     purchasing_documents = unique_series(
         source_item_df[purchasing_document_col]
     )
+    material_col = find_column(
+        source_item_df,
+        ["Material", "Material No", "Material Number", "MATNR"],
+    )
+    rejection_col = find_column(
+        source_item_df,
+        [
+            "Reason for rejection",
+            "Reason For Rejection",
+            "Rejection Reason",
+        ],
+    )
+    rejection_values = source_item_df[rejection_col]
+    rejection_blank = rejection_values.isna() | (
+        rejection_values.astype(str).str.strip().isin(
+            ["", "nan", "None", "NaT"]
+        )
+    )
+    materials = unique_series(
+        source_item_df.loc[rejection_blank, material_col]
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / OUTPUT_PURCHASING_DOCUMENT
-    purchasing_documents.to_frame("Purchasing Document").to_excel(
-        output_path,
-        index=False,
-    )
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        purchasing_documents.to_frame("Purchasing Document").to_excel(
+            writer,
+            sheet_name="Purchasing Document",
+            index=False,
+        )
+        materials.to_frame("Material").to_excel(
+            writer,
+            sheet_name="Material",
+            index=False,
+        )
 
     return ProgressSourceResult(
         job_id=JOB_ID_PROGRESS_SOURCE,
         source_item_row_count=len(source_item_df),
         parts_progress_row_count=len(parts_progress_df),
         purchasing_document_count=len(purchasing_documents),
+        material_count=len(materials),
         source_item_files=[name for name, _ in source_item_frames],
         parts_progress_files=[name for name, _ in parts_progress_frames],
         files={"purchasing_document": output_path},
         preview=purchasing_documents.head(20).tolist(),
+        material_preview=materials.head(20).tolist(),
     )

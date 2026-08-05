@@ -756,6 +756,10 @@ export default function App() {
                     label="Purchasing Document unik"
                     value={progressSourceResult.purchasing_document_count}
                   />
+                  <StatCard
+                    label="Material unik (rejection blank)"
+                    value={progressSourceResult.material_count}
+                  />
                 </div>
                 <div className="downloads">
                   <a
@@ -764,13 +768,19 @@ export default function App() {
                     )}
                     download
                   >
-                    Download Purchasing Document unik
+                    Download Purchasing Document & Material unik
                   </a>
                 </div>
-                <PreviewList
-                  title="Preview Purchasing Document unik"
-                  items={progressSourceResult.preview ?? []}
-                />
+                <div className="preview-grid">
+                  <PreviewList
+                    title="Preview Purchasing Document unik"
+                    items={progressSourceResult.preview ?? []}
+                  />
+                  <PreviewList
+                    title="Preview Material unik (rejection blank)"
+                    items={progressSourceResult.material_preview ?? []}
+                  />
+                </div>
               </>
             )}
           </section>
