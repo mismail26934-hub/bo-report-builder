@@ -3,10 +3,14 @@ export type FolderInfo = {
   sap_dir: string;
   partviz_dir: string;
   order_item_dir: string;
+  source_item_dir: string;
+  parts_progress_dir: string;
   psc_files: string[];
   sap_files: string[];
   partviz_files: string[];
   order_item_files: string[];
+  source_item_files: string[];
+  parts_progress_files: string[];
   default_sales_office: string;
   default_plant: string;
   default_exclude_part_numbers: string;
@@ -51,6 +55,17 @@ export type OrderItemPriceProcessResponse = {
   source_files: string[];
   downloads: Record<string, string>;
   preview: Record<string, string>[];
+};
+
+export type ProgressSourceProcessResponse = {
+  job_id: string;
+  source_item_row_count: number;
+  parts_progress_row_count: number;
+  purchasing_document_count: number;
+  source_item_files: string[];
+  parts_progress_files: string[];
+  downloads: Record<string, string>;
+  preview: string[];
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -157,6 +172,44 @@ export async function processOrderItemPrice(
   }
 
   const res = await fetch(`${API_BASE}/api/order-item-price/process`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export type ProgressSourceProcessPayload = {
+  source: "folder" | "upload";
+  sourceItemFiles?: FileList | null;
+  partsProgressFiles?: FileList | null;
+};
+
+export async function processProgressSource(
+  payload: ProgressSourceProcessPayload,
+): Promise<ProgressSourceProcessResponse> {
+  const form = new FormData();
+  form.append("source", payload.source);
+
+  if (payload.source === "upload") {
+    if (
+      !payload.sourceItemFiles?.length ||
+      !payload.partsProgressFiles?.length
+    ) {
+      throw new Error(
+        "Upload mode membutuhkan file Source Item dan Parts Progress.",
+      );
+    }
+    Array.from(payload.sourceItemFiles).forEach((file) =>
+      form.append("source_item_files", file),
+    );
+    Array.from(payload.partsProgressFiles).forEach((file) =>
+      form.append("parts_progress_files", file),
+    );
+  }
+
+  const res = await fetch(`${API_BASE}/api/progress-source/process`, {
     method: "POST",
     body: form,
   });

@@ -14,11 +14,13 @@ EXCEL_EXTENSIONS = {".xlsx", ".xls", ".XLSX", ".XLS"}
 JOB_ID_BO = "bo"
 JOB_ID_PARTVIZ = "partviz"
 JOB_ID_ORDER_ITEM = "order-item"
+JOB_ID_PROGRESS_SOURCE = "progress-source"
 OUTPUT_COMPARE = "compare.xlsx"
 OUTPUT_PSC_SO = "psc_so_unique.xlsx"
 OUTPUT_SAP_DOC = "sap_sales_document_unique.xlsx"
 OUTPUT_PARTVIZ_MERGED = "partviz_merged.xlsx"
 OUTPUT_ORDER_ITEM_PRICE = "order_item_price_per_material.xlsx"
+OUTPUT_PURCHASING_DOCUMENT = "purchasing_document_unique.xlsx"
 
 # PartViz milestone sort order (lower index = earlier in output)
 MILESTONE_ORDER = [
@@ -70,14 +72,18 @@ def list_excel_files(folder: Path) -> list[Path]:
     return sorted(files)
 
 
-def read_excel_source(source: Path | BinaryIO | bytes, filename: str | None = None) -> pd.DataFrame:
+def read_excel_source(
+    source: Path | BinaryIO | bytes,
+    filename: str | None = None,
+    usecols=None,
+) -> pd.DataFrame:
     if isinstance(source, Path):
-        df = pd.read_excel(source, dtype=str)
+        df = pd.read_excel(source, dtype=str, usecols=usecols)
     elif isinstance(source, (bytes, bytearray)):
-        df = pd.read_excel(io.BytesIO(source), dtype=str)
+        df = pd.read_excel(io.BytesIO(source), dtype=str, usecols=usecols)
     else:
         content = source.read()
-        df = pd.read_excel(io.BytesIO(content), dtype=str)
+        df = pd.read_excel(io.BytesIO(content), dtype=str, usecols=usecols)
 
     df = _normalize_columns(df)
     # Drop fully empty rows (common blank line under header)
@@ -448,4 +454,65 @@ def process_order_item_price_dataframes(
         source_files=[name for name, _ in frames],
         files={"order_item_price": output_path},
         preview=preview,
+    )
+
+
+@dataclass
+class ProgressSourceResult:
+    job_id: str
+    source_item_row_count: int
+    parts_progress_row_count: int
+    purchasing_document_count: int
+    source_item_files: list[str]
+    parts_progress_files: list[str]
+    files: dict[str, Path]
+    preview: list[str]
+
+
+def process_progress_source_dataframes(
+    source_item_frames: list[tuple[str, pd.DataFrame]],
+    parts_progress_frames: list[tuple[str, pd.DataFrame]],
+    output_dir: Path,
+) -> ProgressSourceResult:
+    if not source_item_frames:
+        raise ValueError("Tidak ada data Source Item untuk diproses.")
+    if not parts_progress_frames:
+        raise ValueError("Tidak ada data Parts Progress untuk diproses.")
+
+    source_item_df = pd.concat(
+        [frame for _, frame in source_item_frames],
+        ignore_index=True,
+    )
+    parts_progress_df = pd.concat(
+        [frame for _, frame in parts_progress_frames],
+        ignore_index=True,
+    )
+    purchasing_document_col = find_column(
+        source_item_df,
+        [
+            "Purchasing Document",
+            "Purchasing_Document",
+            "PURCHASING_DOCUMENT",
+        ],
+    )
+    purchasing_documents = unique_series(
+        source_item_df[purchasing_document_col]
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / OUTPUT_PURCHASING_DOCUMENT
+    purchasing_documents.to_frame("Purchasing Document").to_excel(
+        output_path,
+        index=False,
+    )
+
+    return ProgressSourceResult(
+        job_id=JOB_ID_PROGRESS_SOURCE,
+        source_item_row_count=len(source_item_df),
+        parts_progress_row_count=len(parts_progress_df),
+        purchasing_document_count=len(purchasing_documents),
+        source_item_files=[name for name, _ in source_item_frames],
+        parts_progress_files=[name for name, _ in parts_progress_frames],
+        files={"purchasing_document": output_path},
+        preview=purchasing_documents.head(20).tolist(),
     )

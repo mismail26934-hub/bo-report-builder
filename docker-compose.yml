@@ -6,6 +6,8 @@ services:
       - ./data-sap-zmmm_open_bo:/app/data-sap-zmmm_open_bo:ro
       - ./data-partviz:/app/data-partviz:ro
       - ./data-sap-zvsd_parts_progress-order_item:/app/data-sap-zvsd_parts_progress-order_item:ro
+      - ./data-sap-zvsd_parts_progress-source_item:/app/data-sap-zvsd_parts_progress-source_item:ro
+      - ./data-sap-zvsd_parts_progress:/app/data-sap-zvsd_parts_progress:ro
       - ./output:/app/output
     environment:
       CORS_ORIGINS: "*"

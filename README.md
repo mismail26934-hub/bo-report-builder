@@ -117,6 +117,32 @@ Setiap proses menimpa file tetap berikut:
 
 ---
 
+## Alur proses — Parts Progress Source Item
+
+### 1. Sumber data
+
+| Mode | Keterangan |
+|------|------------|
+| Folder server | Membaca multiple Excel di `data-sap-zvsd_parts_progress-source_item` dan `data-sap-zvsd_parts_progress` |
+| Upload | User mengunggah multiple file Source Item dan Parts Progress dari browser |
+
+### 2. Filter & remove duplicate
+
+1. Gabungkan semua file Source Item.
+2. Ambil kolom `Purchasing Document`.
+3. Buang nilai kosong dan remove duplicate.
+4. File Parts Progress dibaca dan divalidasi sebagai dataset pasangan; kolom `Purchasing Document` hanya tersedia di Source Item.
+
+### 3. Download hasil
+
+| File | Isi |
+|------|-----|
+| `purchasing_document_unique.xlsx` | Daftar `Purchasing Document` unik dari Source Item |
+
+Setiap proses menimpa file hasil sebelumnya.
+
+---
+
 ## Stack
 
 - **Frontend:** React + Vite + TypeScript + TanStack Query
@@ -132,6 +158,8 @@ bo-report/
 ├── data-sap-zmmm_open_bo/
 ├── data-partviz/
 ├── data-sap-zvsd_parts_progress-order_item/
+├── data-sap-zvsd_parts_progress-source_item/
+├── data-sap-zvsd_parts_progress/
 ├── output/
 └── docker-compose.yml
 ```
@@ -174,7 +202,7 @@ docker compose up --build -d
 - Web: http://server-ip:8080
 - API: http://server-ip:8000
 
-Pastikan folder `data-psc`, `data-sap-zmmm_open_bo`, `data-partviz`, dan `data-sap-zvsd_parts_progress-order_item` berisi file Excel di server.
+Pastikan semua folder data yang tercantum pada struktur di atas berisi file Excel di server.
 
 ## Field UI
 
@@ -200,3 +228,10 @@ Pastikan folder `data-psc`, `data-sap-zmmm_open_bo`, `data-partviz`, dan `data-s
 |------|---------|------------|
 | Sumber data | Folder server | `data-sap-zvsd_parts_progress-order_item` atau upload multiple Excel |
 | Rumus | tetap | `(Parts Selling Price - ABS(Discount Total)) / Order Quantity` |
+
+### Parts Progress Source Item
+
+| Field | Default | Keterangan |
+|------|---------|------------|
+| Sumber data | Folder server | Dua folder server atau upload multiple Excel untuk masing-masing dataset |
+| Output | tetap | Unique `Purchasing Document` dari Source Item |

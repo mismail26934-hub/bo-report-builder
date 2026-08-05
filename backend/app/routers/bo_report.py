@@ -12,12 +12,14 @@ from app.services.excel_service import (
     OUTPUT_COMPARE,
     OUTPUT_ORDER_ITEM_PRICE,
     OUTPUT_PARTVIZ_MERGED,
+    OUTPUT_PURCHASING_DOCUMENT,
     OUTPUT_PSC_SO,
     OUTPUT_SAP_DOC,
     list_excel_files,
     process_dataframes,
     process_order_item_price_dataframes,
     process_partviz_dataframes,
+    process_progress_source_dataframes,
     read_excel_source,
 )
 
@@ -32,10 +34,14 @@ class FolderInfo(BaseModel):
     sap_dir: str
     partviz_dir: str
     order_item_dir: str
+    source_item_dir: str
+    parts_progress_dir: str
     psc_files: list[str]
     sap_files: list[str]
     partviz_files: list[str]
     order_item_files: list[str]
+    source_item_files: list[str]
+    parts_progress_files: list[str]
     default_sales_office: str
     default_plant: str
     default_exclude_part_numbers: str
@@ -82,6 +88,17 @@ class OrderItemPriceProcessResponse(BaseModel):
     preview: list[dict[str, str]] = Field(default_factory=list)
 
 
+class ProgressSourceProcessResponse(BaseModel):
+    job_id: str
+    source_item_row_count: int
+    parts_progress_row_count: int
+    purchasing_document_count: int
+    source_item_files: list[str]
+    parts_progress_files: list[str]
+    downloads: dict[str, str]
+    preview: list[str] = Field(default_factory=list)
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -93,15 +110,23 @@ def get_folders() -> FolderInfo:
     sap_dir = settings.resolved_sap_dir
     partviz_dir = settings.resolved_partviz_dir
     order_item_dir = settings.resolved_order_item_dir
+    source_item_dir = settings.resolved_source_item_dir
+    parts_progress_dir = settings.resolved_parts_progress_dir
     return FolderInfo(
         psc_dir=str(psc_dir),
         sap_dir=str(sap_dir),
         partviz_dir=str(partviz_dir),
         order_item_dir=str(order_item_dir),
+        source_item_dir=str(source_item_dir),
+        parts_progress_dir=str(parts_progress_dir),
         psc_files=[p.name for p in list_excel_files(psc_dir)],
         sap_files=[p.name for p in list_excel_files(sap_dir)],
         partviz_files=[p.name for p in list_excel_files(partviz_dir)],
         order_item_files=[p.name for p in list_excel_files(order_item_dir)],
+        source_item_files=[p.name for p in list_excel_files(source_item_dir)],
+        parts_progress_files=[
+            p.name for p in list_excel_files(parts_progress_dir)
+        ],
         default_sales_office=settings.default_sales_office,
         default_plant=settings.default_plant,
         default_exclude_part_numbers=settings.default_exclude_part_numbers,
@@ -115,7 +140,10 @@ def _validate_upload(file: UploadFile) -> None:
         raise HTTPException(status_code=400, detail=f"File tidak didukung: {name}")
 
 
-async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, object]]:
+async def _read_uploads(
+    files: list[UploadFile],
+    usecols=None,
+) -> list[tuple[str, object]]:
     frames: list[tuple[str, object]] = []
     max_bytes = settings.max_upload_mb * 1024 * 1024
     for upload in files:
@@ -127,7 +155,11 @@ async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, object]]:
                 detail=f"File terlalu besar (max {settings.max_upload_mb} MB): {upload.filename}",
             )
         try:
-            df = read_excel_source(content, filename=upload.filename)
+            df = read_excel_source(
+                content,
+                filename=upload.filename,
+                usecols=usecols,
+            )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=400,
@@ -329,6 +361,102 @@ async def process_order_item_price(
     )
 
 
+@router.post(
+    "/progress-source/process",
+    response_model=ProgressSourceProcessResponse,
+)
+async def process_progress_source(
+    source: Annotated[str, Form()] = "folder",
+    source_item_files: list[UploadFile] | None = File(default=None),
+    parts_progress_files: list[UploadFile] | None = File(default=None),
+) -> ProgressSourceProcessResponse:
+    try:
+        if source == "upload":
+            if not source_item_files or not parts_progress_files:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Upload mode membutuhkan file Source Item dan "
+                        "Parts Progress."
+                    ),
+                )
+            source_item_frames = await _read_uploads(
+                source_item_files,
+                usecols=["Purchasing Document"],
+            )
+            parts_progress_frames = await _read_uploads(
+                parts_progress_files,
+                usecols=[0],
+            )
+        else:
+            source_item_paths = list_excel_files(
+                settings.resolved_source_item_dir
+            )
+            parts_progress_paths = list_excel_files(
+                settings.resolved_parts_progress_dir
+            )
+            if not source_item_paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Folder data-sap-zvsd_parts_progress-source_item "
+                        "kosong."
+                    ),
+                )
+            if not parts_progress_paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Folder data-sap-zvsd_parts_progress kosong.",
+                )
+            source_item_frames = [
+                (
+                    path.name,
+                    read_excel_source(
+                        path,
+                        usecols=["Purchasing Document"],
+                    ),
+                )
+                for path in source_item_paths
+            ]
+            parts_progress_frames = [
+                (path.name, read_excel_source(path, usecols=[0]))
+                for path in parts_progress_paths
+            ]
+
+        result = process_progress_source_dataframes(
+            source_item_frames=source_item_frames,
+            parts_progress_frames=parts_progress_frames,
+            output_dir=settings.resolved_output_dir,
+        )
+    except HTTPException:
+        raise
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal memproses Purchasing Document: {exc}",
+        ) from exc
+
+    JOBS[result.job_id] = result.files
+    downloads = {
+        key: f"/api/download/{result.job_id}/{key}"
+        for key in result.files
+    }
+    return ProgressSourceProcessResponse(
+        job_id=result.job_id,
+        source_item_row_count=result.source_item_row_count,
+        parts_progress_row_count=result.parts_progress_row_count,
+        purchasing_document_count=result.purchasing_document_count,
+        source_item_files=result.source_item_files,
+        parts_progress_files=result.parts_progress_files,
+        downloads=downloads,
+        preview=result.preview,
+    )
+
+
 @router.get("/download/{job_id}/{kind}")
 def download_result(job_id: str, kind: str) -> FileResponse:
     job = JOBS.get(job_id)
@@ -342,6 +470,7 @@ def download_result(job_id: str, kind: str) -> FileResponse:
             "compare": OUTPUT_COMPARE,
             "partviz_merged": OUTPUT_PARTVIZ_MERGED,
             "order_item_price": OUTPUT_ORDER_ITEM_PRICE,
+            "purchasing_document": OUTPUT_PURCHASING_DOCUMENT,
         }
         name = fixed.get(kind)
         if not name:

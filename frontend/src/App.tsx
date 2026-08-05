@@ -4,6 +4,7 @@ import {
   useFolders,
   useProcessOrderItemPrice,
   useProcessPartviz,
+  useProcessProgressSource,
   useProcessReport,
 } from "./hooks/useBoReport";
 
@@ -77,6 +78,7 @@ export default function App() {
   const processMutation = useProcessReport();
   const partvizMutation = useProcessPartviz();
   const orderItemMutation = useProcessOrderItemPrice();
+  const progressSourceMutation = useProcessProgressSource();
 
   const [salesOffice, setSalesOffice] = useState("0G38");
   const [plant, setPlant] = useState("1G38");
@@ -91,6 +93,13 @@ export default function App() {
     "folder",
   );
   const [orderItemFiles, setOrderItemFiles] = useState<FileList | null>(null);
+  const [progressSource, setProgressSource] = useState<
+    "folder" | "upload"
+  >("folder");
+  const [sourceItemFiles, setSourceItemFiles] =
+    useState<FileList | null>(null);
+  const [partsProgressFiles, setPartsProgressFiles] =
+    useState<FileList | null>(null);
   const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
@@ -137,9 +146,19 @@ export default function App() {
     });
   }
 
+  function onProgressSourceSubmit(e: FormEvent) {
+    e.preventDefault();
+    progressSourceMutation.mutate({
+      source: progressSource,
+      sourceItemFiles,
+      partsProgressFiles,
+    });
+  }
+
   const result = processMutation.data;
   const partvizResult = partvizMutation.data;
   const orderItemResult = orderItemMutation.data;
+  const progressSourceResult = progressSourceMutation.data;
 
   return (
     <div className="page">
@@ -592,6 +611,165 @@ export default function App() {
                 <PreviewTable
                   title="Preview harga per Material (15 baris pertama)"
                   rows={orderItemResult.preview ?? []}
+                />
+              </>
+            )}
+          </section>
+        </div>
+      </section>
+
+      <section className="feature-block">
+        <header className="feature-header">
+          <h2>Parts Progress — Purchasing Document</h2>
+          <p className="muted">
+            Gabungkan multiple Excel Source Item dan Parts Progress, lalu ambil
+            unique <code>Purchasing Document</code> dari Source Item.
+          </p>
+        </header>
+
+        <div className="layout">
+          <section className="panel">
+            <h2>Proses Source Item × Parts Progress</h2>
+            <form className="form" onSubmit={onProgressSourceSubmit}>
+              <fieldset>
+                <legend>Sumber data</legend>
+                <label className="radio">
+                  <input
+                    type="radio"
+                    name="progress-source"
+                    checked={progressSource === "folder"}
+                    onChange={() => setProgressSource("folder")}
+                  />
+                  Folder server
+                </label>
+                <label className="radio">
+                  <input
+                    type="radio"
+                    name="progress-source"
+                    checked={progressSource === "upload"}
+                    onChange={() => setProgressSource("upload")}
+                  />
+                  Upload multiple file Excel
+                </label>
+              </fieldset>
+
+              {progressSource === "folder" ? (
+                <div className="folder-info">
+                  {folders.isLoading && (
+                    <p className="muted">Memuat daftar file…</p>
+                  )}
+                  {folders.data && (
+                    <>
+                      <div>
+                        <strong>Source Item</strong>
+                        <ul>
+                          {folders.data.source_item_files?.length ? (
+                            folders.data.source_item_files.map((file) => (
+                              <li key={file}>{file}</li>
+                            ))
+                          ) : (
+                            <li className="muted">Kosong</li>
+                          )}
+                        </ul>
+                      </div>
+                      <div>
+                        <strong>Parts Progress</strong>
+                        <ul>
+                          {folders.data.parts_progress_files?.length ? (
+                            folders.data.parts_progress_files.map((file) => (
+                              <li key={file}>{file}</li>
+                            ))
+                          ) : (
+                            <li className="muted">Kosong</li>
+                          )}
+                        </ul>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="uploads">
+                  <label>
+                    File Source Item (.xlsx) — multiple
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls"
+                      multiple
+                      onChange={(e) => setSourceItemFiles(e.target.files)}
+                      required={progressSource === "upload"}
+                    />
+                  </label>
+                  <label>
+                    File Parts Progress (.xlsx) — multiple
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls"
+                      multiple
+                      onChange={(e) => setPartsProgressFiles(e.target.files)}
+                      required={progressSource === "upload"}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={progressSourceMutation.isPending}
+              >
+                {progressSourceMutation.isPending
+                  ? "Memproses…"
+                  : "Ambil Purchasing Document unik"}
+              </button>
+              {progressSourceMutation.isError && (
+                <p className="error">
+                  {(progressSourceMutation.error as Error).message}
+                </p>
+              )}
+            </form>
+          </section>
+
+          <section className="panel">
+            <h2>Hasil Purchasing Document</h2>
+            {!progressSourceResult &&
+              !progressSourceMutation.isPending && (
+                <p className="muted">
+                  Belum ada hasil. Jalankan proses untuk melihat ringkasan.
+                </p>
+              )}
+            {progressSourceMutation.isPending && (
+              <p className="muted">
+                Membaca Excel dan menghapus duplikat…
+              </p>
+            )}
+            {progressSourceResult && (
+              <>
+                <div className="stats">
+                  <StatCard
+                    label="Baris dengan Purchasing Document"
+                    value={progressSourceResult.source_item_row_count}
+                  />
+                  <StatCard
+                    label="Baris Parts Progress"
+                    value={progressSourceResult.parts_progress_row_count}
+                  />
+                  <StatCard
+                    label="Purchasing Document unik"
+                    value={progressSourceResult.purchasing_document_count}
+                  />
+                </div>
+                <div className="downloads">
+                  <a
+                    href={downloadUrl(
+                      progressSourceResult.downloads.purchasing_document,
+                    )}
+                    download
+                  >
+                    Download Purchasing Document unik
+                  </a>
+                </div>
+                <PreviewList
+                  title="Preview Purchasing Document unik"
+                  items={progressSourceResult.preview ?? []}
                 />
               </>
             )}

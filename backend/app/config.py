@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     sap_dir: Path | None = None
     partviz_dir: Path | None = None
     order_item_dir: Path | None = None
+    source_item_dir: Path | None = None
+    parts_progress_dir: Path | None = None
     output_dir: Path | None = None
     default_sales_office: str = "0G38"
     default_plant: str = "1G38"
@@ -35,6 +37,18 @@ class Settings(BaseSettings):
     def resolved_order_item_dir(self) -> Path:
         return self.order_item_dir or (
             self.project_root / "data-sap-zvsd_parts_progress-order_item"
+        )
+
+    @property
+    def resolved_source_item_dir(self) -> Path:
+        return self.source_item_dir or (
+            self.project_root / "data-sap-zvsd_parts_progress-source_item"
+        )
+
+    @property
+    def resolved_parts_progress_dir(self) -> Path:
+        return self.parts_progress_dir or (
+            self.project_root / "data-sap-zvsd_parts_progress"
         )
 
     @property
