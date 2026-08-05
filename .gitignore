@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.venv/
+__pycache__/
+*.pyc
+.env
+output/*
+!output/.gitkeep
+.DS_Store
+*.log
+.vite/

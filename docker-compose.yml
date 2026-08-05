@@ -1,0 +1,23 @@
+services:
+  backend:
+    build: ./backend
+    volumes:
+      - ./data-psc:/app/data-psc:ro
+      - ./data-sap-zmmm_open_bo:/app/data-sap-zmmm_open_bo:ro
+      - ./data-partviz:/app/data-partviz:ro
+      - ./output:/app/output
+    environment:
+      CORS_ORIGINS: "*"
+      PROJECT_ROOT: /app
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ""
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend

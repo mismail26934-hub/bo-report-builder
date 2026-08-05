@@ -1,0 +1,337 @@
+from __future__ import annotations
+
+import io
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import BinaryIO
+
+import pandas as pd
+
+EXCEL_EXTENSIONS = {".xlsx", ".xls", ".XLSX", ".XLS"}
+
+# Stable job ids + fixed output filenames (each process overwrites previous)
+JOB_ID_BO = "bo"
+JOB_ID_PARTVIZ = "partviz"
+OUTPUT_COMPARE = "compare.xlsx"
+OUTPUT_PSC_SO = "psc_so_unique.xlsx"
+OUTPUT_SAP_DOC = "sap_sales_document_unique.xlsx"
+OUTPUT_PARTVIZ_MERGED = "partviz_merged.xlsx"
+
+# PartViz milestone sort order (lower index = earlier in output)
+MILESTONE_ORDER = [
+    "Cancelled",
+    "Griefed",
+    "ESD Needed",
+    "Future Dated",
+    "ESD Available",
+    "Sourced",
+    "Shipped",
+]
+
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [
+        re.sub(r"\s+", " ", str(c)).strip()
+        for c in df.columns
+    ]
+    return df
+
+
+def _column_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
+def find_column(df: pd.DataFrame, candidates: list[str]) -> str:
+    key_map = {_column_key(c): c for c in df.columns}
+    for candidate in candidates:
+        key = _column_key(candidate)
+        if key in key_map:
+            return key_map[key]
+    raise KeyError(
+        f"Kolom tidak ditemukan. Dicari: {candidates}. Tersedia: {list(df.columns)}"
+    )
+
+
+def list_excel_files(folder: Path) -> list[Path]:
+    if not folder.exists():
+        return []
+    files: list[Path] = []
+    for path in folder.iterdir():
+        if path.is_file() and path.suffix.lower() in {".xlsx", ".xls"}:
+            files.append(path)
+    return sorted(files)
+
+
+def read_excel_source(source: Path | BinaryIO | bytes, filename: str | None = None) -> pd.DataFrame:
+    if isinstance(source, Path):
+        df = pd.read_excel(source, dtype=str)
+    elif isinstance(source, (bytes, bytearray)):
+        df = pd.read_excel(io.BytesIO(source), dtype=str)
+    else:
+        content = source.read()
+        df = pd.read_excel(io.BytesIO(content), dtype=str)
+
+    df = _normalize_columns(df)
+    # Drop fully empty rows (common blank line under header)
+    df = df.dropna(how="all").reset_index(drop=True)
+    return df
+
+
+def unique_series(series: pd.Series) -> pd.Series:
+    cleaned = (
+        series.dropna()
+        .astype(str)
+        .str.strip()
+        .replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "NaT": pd.NA})
+        .dropna()
+    )
+    return cleaned.drop_duplicates().sort_values().reset_index(drop=True)
+
+
+def parse_filter_values(raw: str) -> list[str]:
+    """Split multi-value filters: comma / semicolon / whitespace."""
+    parts = re.split(r"[,;\s]+", str(raw).strip())
+    values = [p.strip() for p in parts if p.strip()]
+    # preserve order, drop duplicates
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            ordered.append(value)
+    return ordered
+
+
+def parse_exclude_values(raw: str) -> list[str]:
+    """Split exclude list by comma/semicolon only (keep spaces & colons in part numbers)."""
+    if not str(raw).strip():
+        return []
+    parts = re.split(r"[,;]+", str(raw).strip())
+    values = [p.strip() for p in parts if p.strip()]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            ordered.append(value)
+    return ordered
+
+
+@dataclass
+class ProcessResult:
+    job_id: str
+    sales_office: str
+    plant: str
+    exclude_part_numbers: str
+    excluded_row_count: int
+    psc_so_count: int
+    sap_doc_count: int
+    combined_count: int
+    matched_count: int
+    only_psc_count: int
+    only_sap_count: int
+    psc_files: list[str]
+    sap_files: list[str]
+    files: dict[str, Path]
+    preview: dict[str, list[str]]
+
+
+def extract_psc_so_numbers(df: pd.DataFrame, sales_office: str) -> pd.Series:
+    office_col = find_column(df, ["Sales_Office", "Sales Office", "SALES_OFFICE"])
+    so_col = find_column(df, ["SO_Number", "SO_NUMBER", "SO Number", "Sales document"])
+
+    office_values = df[office_col].astype(str).str.strip()
+    filtered = df[office_values == str(sales_office).strip()]
+    return unique_series(filtered[so_col])
+
+
+def exclude_sap_material_rows(
+    df: pd.DataFrame, exclude_parts: list[str]
+) -> tuple[pd.DataFrame, int]:
+    """Drop SAP rows whose Material No is in exclude_parts (row-level only)."""
+    if not exclude_parts:
+        return df, 0
+    material_col = find_column(
+        df,
+        ["Material No", "Material_No", "Material Number", "Material", "MATNR"],
+    )
+    material_values = df[material_col].astype(str).str.strip()
+    mask_exclude = material_values.isin(exclude_parts)
+    excluded_count = int(mask_exclude.sum())
+    return df.loc[~mask_exclude].reset_index(drop=True), excluded_count
+
+
+def extract_sap_sales_documents(df: pd.DataFrame, plants: list[str]) -> pd.Series:
+    if not plants:
+        raise ValueError("Plant wajib diisi.")
+    plant_col = find_column(df, ["Plant", "PLANT", "Werks", "WERKS"])
+    doc_col = find_column(
+        df,
+        ["Sales document", "Sales_document", "SALES_DOCUMENT", "SO_Number", "SO_NUMBER"],
+    )
+    plant_values = df[plant_col].astype(str).str.strip()
+    filtered = df[plant_values.isin(plants)]
+    return unique_series(filtered[doc_col])
+
+
+def process_dataframes(
+    psc_frames: list[tuple[str, pd.DataFrame]],
+    sap_frames: list[tuple[str, pd.DataFrame]],
+    sales_office: str,
+    plant: str,
+    output_dir: Path,
+    exclude_part_numbers: str = "",
+) -> ProcessResult:
+    if not psc_frames:
+        raise ValueError("Tidak ada data PSC untuk diproses.")
+    if not sap_frames:
+        raise ValueError("Tidak ada data SAP untuk diproses.")
+
+    plants = parse_filter_values(plant)
+    if not plants:
+        raise ValueError("Plant wajib diisi.")
+    plant_label = ", ".join(plants)
+
+    exclude_parts = parse_exclude_values(exclude_part_numbers)
+    exclude_label = ", ".join(exclude_parts)
+
+    psc_df = pd.concat([frame for _, frame in psc_frames], ignore_index=True)
+    sap_df = pd.concat([frame for _, frame in sap_frames], ignore_index=True)
+    sap_df, excluded_row_count = exclude_sap_material_rows(sap_df, exclude_parts)
+
+    so_numbers = extract_psc_so_numbers(psc_df, sales_office)
+    sales_docs = extract_sap_sales_documents(sap_df, plants)
+
+    psc_set = set(so_numbers.tolist())
+    sap_set = set(sales_docs.tolist())
+    matched = sorted(psc_set & sap_set)
+    only_psc = sorted(psc_set - sap_set)
+    only_sap = sorted(sap_set - psc_set)
+    combined = unique_series(pd.concat([so_numbers, sales_docs], ignore_index=True))
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    psc_path = output_dir / OUTPUT_PSC_SO
+    sap_path = output_dir / OUTPUT_SAP_DOC
+    compare_path = output_dir / OUTPUT_COMPARE
+
+    so_numbers.to_frame("SO_Number").to_excel(psc_path, index=False)
+    sales_docs.to_frame("Sales_document").to_excel(sap_path, index=False)
+
+    with pd.ExcelWriter(compare_path, engine="openpyxl") as writer:
+        combined.to_frame("SO_Number").to_excel(writer, sheet_name="combined", index=False)
+        pd.DataFrame({"SO_Number": matched}).to_excel(writer, sheet_name="matched", index=False)
+        pd.DataFrame({"SO_Number": only_psc}).to_excel(writer, sheet_name="only_psc", index=False)
+        pd.DataFrame({"Sales_document": only_sap}).to_excel(writer, sheet_name="only_sap", index=False)
+
+    return ProcessResult(
+        job_id=JOB_ID_BO,
+        sales_office=sales_office,
+        plant=plant_label,
+        exclude_part_numbers=exclude_label,
+        excluded_row_count=excluded_row_count,
+        psc_so_count=len(so_numbers),
+        sap_doc_count=len(sales_docs),
+        combined_count=len(combined),
+        matched_count=len(matched),
+        only_psc_count=len(only_psc),
+        only_sap_count=len(only_sap),
+        psc_files=[name for name, _ in psc_frames],
+        sap_files=[name for name, _ in sap_frames],
+        files={
+            "psc_so": psc_path,
+            "sap_doc": sap_path,
+            "compare": compare_path,
+        },
+        preview={
+            "psc_so": so_numbers.head(20).tolist(),
+            "sap_doc": sales_docs.head(20).tolist(),
+            "combined": combined.head(20).tolist(),
+            "matched": matched[:20],
+            "only_psc": only_psc[:20],
+            "only_sap": only_sap[:20],
+        },
+    )
+
+
+@dataclass
+class PartvizResult:
+    job_id: str
+    row_count: int
+    file_count: int
+    source_files: list[str]
+    milestone_order: list[str]
+    milestone_counts: dict[str, int]
+    unknown_milestone_count: int
+    files: dict[str, Path]
+    preview: list[dict[str, str]]
+
+
+def process_partviz_dataframes(
+    frames: list[tuple[str, pd.DataFrame]],
+    output_dir: Path,
+) -> PartvizResult:
+    if not frames:
+        raise ValueError("Tidak ada data PartViz untuk diproses.")
+
+    merged = pd.concat([frame for _, frame in frames], ignore_index=True)
+    milestone_col = find_column(merged, ["Milestone", "MILESTONE", "milestone"])
+
+    values = merged[milestone_col].astype(str).str.strip()
+    values = values.replace({"nan": pd.NA, "None": pd.NA, "NaT": pd.NA, "": pd.NA})
+    merged = merged.assign(**{milestone_col: values})
+
+    known = set(MILESTONE_ORDER)
+    order_index = {name: i for i, name in enumerate(MILESTONE_ORDER)}
+    merged = merged.assign(
+        _milestone_rank=merged[milestone_col].map(order_index).fillna(len(MILESTONE_ORDER)),
+        _milestone_name=merged[milestone_col].fillna("\uffff").astype(str),
+    )
+    merged = (
+        merged.sort_values(["_milestone_rank", "_milestone_name"], kind="mergesort")
+        .drop(columns=["_milestone_rank", "_milestone_name"])
+        .reset_index(drop=True)
+    )
+
+    counts_raw = merged[milestone_col].fillna("(empty)").value_counts()
+    milestone_counts: dict[str, int] = {}
+    for name in MILESTONE_ORDER:
+        milestone_counts[name] = int(counts_raw.get(name, 0))
+    unknown_milestone_count = 0
+    for name, count in counts_raw.items():
+        if name not in known:
+            milestone_counts[str(name)] = int(count)
+            unknown_milestone_count += int(count)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    merged_path = output_dir / OUTPUT_PARTVIZ_MERGED
+    merged.to_excel(merged_path, index=False)
+
+    preview_rows = merged.head(15).fillna("").astype(str)
+    preview_cols = [
+        c
+        for c in [
+            milestone_col,
+            "Prim PSO",
+            "Part No",
+            "Cust Ref",
+            "Est Ship Date",
+        ]
+        if c in preview_rows.columns
+    ]
+    if not preview_cols:
+        preview_cols = list(preview_rows.columns[:5])
+    preview = preview_rows[preview_cols].to_dict(orient="records")
+
+    return PartvizResult(
+        job_id=JOB_ID_PARTVIZ,
+        row_count=len(merged),
+        file_count=len(frames),
+        source_files=[name for name, _ in frames],
+        milestone_order=list(MILESTONE_ORDER),
+        milestone_counts=milestone_counts,
+        unknown_milestone_count=unknown_milestone_count,
+        files={"partviz_merged": merged_path},
+        preview=preview,
+    )

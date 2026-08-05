@@ -1,0 +1,281 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+
+from app.config import settings
+from app.services.excel_service import (
+    OUTPUT_COMPARE,
+    OUTPUT_PARTVIZ_MERGED,
+    OUTPUT_PSC_SO,
+    OUTPUT_SAP_DOC,
+    list_excel_files,
+    process_dataframes,
+    process_partviz_dataframes,
+    read_excel_source,
+)
+
+router = APIRouter(prefix="/api", tags=["bo-report"])
+
+# In-memory job registry for download paths (process lifetime)
+JOBS: dict[str, dict[str, Path]] = {}
+
+
+class FolderInfo(BaseModel):
+    psc_dir: str
+    sap_dir: str
+    partviz_dir: str
+    psc_files: list[str]
+    sap_files: list[str]
+    partviz_files: list[str]
+    default_sales_office: str
+    default_plant: str
+    default_exclude_part_numbers: str
+
+
+class ProcessResponse(BaseModel):
+    job_id: str
+    sales_office: str
+    plant: str
+    exclude_part_numbers: str
+    excluded_row_count: int
+    psc_so_count: int
+    sap_doc_count: int
+    combined_count: int
+    matched_count: int
+    only_psc_count: int
+    only_sap_count: int
+    psc_files: list[str]
+    sap_files: list[str]
+    downloads: dict[str, str]
+    preview: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class PartvizProcessResponse(BaseModel):
+    job_id: str
+    row_count: int
+    file_count: int
+    source_files: list[str]
+    milestone_order: list[str]
+    milestone_counts: dict[str, int]
+    unknown_milestone_count: int
+    downloads: dict[str, str]
+    preview: list[dict[str, str]] = Field(default_factory=list)
+
+
+@router.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@router.get("/folders", response_model=FolderInfo)
+def get_folders() -> FolderInfo:
+    psc_dir = settings.resolved_psc_dir
+    sap_dir = settings.resolved_sap_dir
+    partviz_dir = settings.resolved_partviz_dir
+    return FolderInfo(
+        psc_dir=str(psc_dir),
+        sap_dir=str(sap_dir),
+        partviz_dir=str(partviz_dir),
+        psc_files=[p.name for p in list_excel_files(psc_dir)],
+        sap_files=[p.name for p in list_excel_files(sap_dir)],
+        partviz_files=[p.name for p in list_excel_files(partviz_dir)],
+        default_sales_office=settings.default_sales_office,
+        default_plant=settings.default_plant,
+        default_exclude_part_numbers=settings.default_exclude_part_numbers,
+    )
+
+
+def _validate_upload(file: UploadFile) -> None:
+    name = file.filename or ""
+    suffix = Path(name).suffix.lower()
+    if suffix not in {".xlsx", ".xls"}:
+        raise HTTPException(status_code=400, detail=f"File tidak didukung: {name}")
+
+
+async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, object]]:
+    frames: list[tuple[str, object]] = []
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    for upload in files:
+        _validate_upload(upload)
+        content = await upload.read()
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File terlalu besar (max {settings.max_upload_mb} MB): {upload.filename}",
+            )
+        try:
+            df = read_excel_source(content, filename=upload.filename)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail=f"Gagal membaca Excel {upload.filename}: {exc}",
+            ) from exc
+        frames.append((upload.filename or "upload.xlsx", df))
+    return frames
+
+
+@router.post("/process", response_model=ProcessResponse)
+async def process_report(
+    sales_office: Annotated[str, Form()] = settings.default_sales_office,
+    plant: Annotated[str, Form()] = settings.default_plant,
+    exclude_part_numbers: Annotated[str, Form()] = settings.default_exclude_part_numbers,
+    source: Annotated[str, Form()] = "folder",
+    psc_files: list[UploadFile] | None = File(default=None),
+    sap_files: list[UploadFile] | None = File(default=None),
+) -> ProcessResponse:
+    sales_office = (sales_office or settings.default_sales_office).strip()
+    plant = (plant or settings.default_plant).strip()
+    exclude_part_numbers = (exclude_part_numbers or "").strip()
+    if not sales_office:
+        raise HTTPException(status_code=400, detail="Sales Office wajib diisi.")
+    if not plant:
+        raise HTTPException(status_code=400, detail="Plant wajib diisi.")
+
+    try:
+        if source == "upload":
+            if not psc_files or not sap_files:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Upload mode membutuhkan file PSC dan SAP.",
+                )
+            psc_frames = await _read_uploads(psc_files)
+            sap_frames = await _read_uploads(sap_files)
+        else:
+            psc_paths = list_excel_files(settings.resolved_psc_dir)
+            sap_paths = list_excel_files(settings.resolved_sap_dir)
+            if not psc_paths:
+                raise HTTPException(status_code=400, detail="Folder data-psc kosong.")
+            if not sap_paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Folder data-sap-zmmm_open_bo kosong.",
+                )
+            psc_frames = [(p.name, read_excel_source(p)) for p in psc_paths]
+            sap_frames = [(p.name, read_excel_source(p)) for p in sap_paths]
+
+        result = process_dataframes(
+            psc_frames=psc_frames,
+            sap_frames=sap_frames,
+            sales_office=sales_office,
+            plant=plant,
+            exclude_part_numbers=exclude_part_numbers,
+            output_dir=settings.resolved_output_dir,
+        )
+    except HTTPException:
+        raise
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Gagal memproses: {exc}") from exc
+
+    JOBS[result.job_id] = result.files
+    downloads = {
+        key: f"/api/download/{result.job_id}/{key}"
+        for key in result.files
+    }
+
+    return ProcessResponse(
+        job_id=result.job_id,
+        sales_office=result.sales_office,
+        plant=result.plant,
+        exclude_part_numbers=result.exclude_part_numbers,
+        excluded_row_count=result.excluded_row_count,
+        psc_so_count=result.psc_so_count,
+        sap_doc_count=result.sap_doc_count,
+        combined_count=result.combined_count,
+        matched_count=result.matched_count,
+        only_psc_count=result.only_psc_count,
+        only_sap_count=result.only_sap_count,
+        psc_files=result.psc_files,
+        sap_files=result.sap_files,
+        downloads=downloads,
+        preview=result.preview,
+    )
+
+
+@router.post("/partviz/process", response_model=PartvizProcessResponse)
+async def process_partviz(
+    source: Annotated[str, Form()] = "folder",
+    partviz_files: list[UploadFile] | None = File(default=None),
+) -> PartvizProcessResponse:
+    try:
+        if source == "upload":
+            if not partviz_files:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Upload mode membutuhkan minimal satu file PartViz.",
+                )
+            frames = await _read_uploads(partviz_files)
+        else:
+            paths = list_excel_files(settings.resolved_partviz_dir)
+            if not paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Folder data-partviz kosong.",
+                )
+            frames = [(p.name, read_excel_source(p)) for p in paths]
+
+        result = process_partviz_dataframes(
+            frames=frames,
+            output_dir=settings.resolved_output_dir,
+        )
+    except HTTPException:
+        raise
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Gagal memproses PartViz: {exc}") from exc
+
+    JOBS[result.job_id] = result.files
+    downloads = {
+        key: f"/api/download/{result.job_id}/{key}"
+        for key in result.files
+    }
+
+    return PartvizProcessResponse(
+        job_id=result.job_id,
+        row_count=result.row_count,
+        file_count=result.file_count,
+        source_files=result.source_files,
+        milestone_order=result.milestone_order,
+        milestone_counts=result.milestone_counts,
+        unknown_milestone_count=result.unknown_milestone_count,
+        downloads=downloads,
+        preview=result.preview,
+    )
+
+
+@router.get("/download/{job_id}/{kind}")
+def download_result(job_id: str, kind: str) -> FileResponse:
+    job = JOBS.get(job_id)
+    if job and kind in job:
+        file_path = job[kind]
+    else:
+        # Fallback: fixed filenames in output/ (overwrite on each process)
+        fixed = {
+            "psc_so": OUTPUT_PSC_SO,
+            "sap_doc": OUTPUT_SAP_DOC,
+            "compare": OUTPUT_COMPARE,
+            "partviz_merged": OUTPUT_PARTVIZ_MERGED,
+        }
+        name = fixed.get(kind)
+        if not name:
+            raise HTTPException(status_code=404, detail="File hasil tidak ditemukan.")
+        file_path = settings.resolved_output_dir / name
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File hasil tidak ditemukan.")
+
+    return FileResponse(
+        path=file_path,
+        filename=file_path.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
