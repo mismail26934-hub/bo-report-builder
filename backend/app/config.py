@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     psc_dir: Path | None = None
     sap_dir: Path | None = None
     partviz_dir: Path | None = None
+    order_item_dir: Path | None = None
     output_dir: Path | None = None
     default_sales_office: str = "0G38"
     default_plant: str = "1G38"
@@ -29,6 +30,12 @@ class Settings(BaseSettings):
     @property
     def resolved_partviz_dir(self) -> Path:
         return self.partviz_dir or (self.project_root / "data-partviz")
+
+    @property
+    def resolved_order_item_dir(self) -> Path:
+        return self.order_item_dir or (
+            self.project_root / "data-sap-zvsd_parts_progress-order_item"
+        )
 
     @property
     def resolved_output_dir(self) -> Path:

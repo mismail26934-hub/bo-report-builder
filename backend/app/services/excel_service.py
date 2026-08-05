@@ -13,10 +13,12 @@ EXCEL_EXTENSIONS = {".xlsx", ".xls", ".XLSX", ".XLS"}
 # Stable job ids + fixed output filenames (each process overwrites previous)
 JOB_ID_BO = "bo"
 JOB_ID_PARTVIZ = "partviz"
+JOB_ID_ORDER_ITEM = "order-item"
 OUTPUT_COMPARE = "compare.xlsx"
 OUTPUT_PSC_SO = "psc_so_unique.xlsx"
 OUTPUT_SAP_DOC = "sap_sales_document_unique.xlsx"
 OUTPUT_PARTVIZ_MERGED = "partviz_merged.xlsx"
+OUTPUT_ORDER_ITEM_PRICE = "order_item_price_per_material.xlsx"
 
 # PartViz milestone sort order (lower index = earlier in output)
 MILESTONE_ORDER = [
@@ -59,7 +61,11 @@ def list_excel_files(folder: Path) -> list[Path]:
         return []
     files: list[Path] = []
     for path in folder.iterdir():
-        if path.is_file() and path.suffix.lower() in {".xlsx", ".xls"}:
+        if (
+            path.is_file()
+            and not path.name.startswith("~$")
+            and path.suffix.lower() in {".xlsx", ".xls"}
+        ):
             files.append(path)
     return sorted(files)
 
@@ -265,7 +271,7 @@ class PartvizResult:
     milestone_counts: dict[str, int]
     unknown_milestone_count: int
     files: dict[str, Path]
-    preview: list[dict[str, str]]
+    preview: list[str]
 
 
 def process_partviz_dataframes(
@@ -308,21 +314,13 @@ def process_partviz_dataframes(
     merged_path = output_dir / OUTPUT_PARTVIZ_MERGED
     merged.to_excel(merged_path, index=False)
 
-    preview_rows = merged.head(15).fillna("").astype(str)
-    preview_cols = [
-        c
-        for c in [
-            milestone_col,
-            "Prim PSO",
-            "Part No",
-            "Cust Ref",
-            "Est Ship Date",
-        ]
-        if c in preview_rows.columns
-    ]
-    if not preview_cols:
-        preview_cols = list(preview_rows.columns[:5])
-    preview = preview_rows[preview_cols].to_dict(orient="records")
+    # Unique milestones in sorted order (known first, then unknown alpha)
+    present = set(
+        merged[milestone_col].dropna().astype(str).str.strip().tolist()
+    )
+    preview = [name for name in MILESTONE_ORDER if name in present]
+    unknown_names = sorted(n for n in present if n not in known)
+    preview.extend(unknown_names)
 
     return PartvizResult(
         job_id=JOB_ID_PARTVIZ,
@@ -333,5 +331,121 @@ def process_partviz_dataframes(
         milestone_counts=milestone_counts,
         unknown_milestone_count=unknown_milestone_count,
         files={"partviz_merged": merged_path},
+        preview=preview,
+    )
+
+
+@dataclass
+class OrderItemPriceResult:
+    job_id: str
+    row_count: int
+    material_count: int
+    file_count: int
+    invalid_row_count: int
+    source_files: list[str]
+    files: dict[str, Path]
+    preview: list[dict[str, str]]
+
+
+def _to_numeric(series: pd.Series) -> pd.Series:
+    """Convert Excel numeric text, including comma separators and parentheses."""
+    cleaned = (
+        series.astype(str)
+        .str.strip()
+        .str.replace(",", "", regex=False)
+        .str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+        .replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "NaT": pd.NA})
+    )
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
+def process_order_item_price_dataframes(
+    frames: list[tuple[str, pd.DataFrame]],
+    output_dir: Path,
+) -> OrderItemPriceResult:
+    if not frames:
+        raise ValueError("Tidak ada data Order Item untuk diproses.")
+
+    sourced_frames: list[pd.DataFrame] = []
+    for name, frame in frames:
+        sourced = frame.copy()
+        sourced["Source File"] = name
+        sourced_frames.append(sourced)
+    merged = pd.concat(sourced_frames, ignore_index=True)
+
+    material_col = find_column(
+        merged,
+        ["Material", "Material No", "Material Number", "MATNR"],
+    )
+    quantity_col = find_column(
+        merged,
+        ["Order Quantity", "Order Qty", "Ordered Quantity", "Quantity"],
+    )
+    selling_price_col = find_column(
+        merged,
+        ["Parts Selling Price", "Part Selling Price", "Selling Price"],
+    )
+    discount_col = find_column(
+        merged,
+        ["Discount Total", "Total Discount", "Discount"],
+    )
+
+    order_quantity = _to_numeric(merged[quantity_col])
+    selling_price = _to_numeric(merged[selling_price_col])
+    discount_total = _to_numeric(merged[discount_col])
+    valid = (
+        order_quantity.notna()
+        & order_quantity.ne(0)
+        & selling_price.notna()
+        & discount_total.notna()
+    )
+
+    price_per_material = pd.Series(pd.NA, index=merged.index, dtype="Float64")
+    price_per_material.loc[valid] = (
+        (selling_price.loc[valid] - discount_total.loc[valid].abs())
+        / order_quantity.loc[valid]
+    ).round(2)
+    merged["Price per Material"] = price_per_material
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / OUTPUT_ORDER_ITEM_PRICE
+    merged.to_excel(output_path, index=False)
+
+    preview_columns = [
+        column
+        for column in [
+            material_col,
+            quantity_col,
+            selling_price_col,
+            discount_col,
+            "Price per Material",
+        ]
+        if column in merged.columns
+    ]
+    preview = (
+        merged.loc[valid, preview_columns]
+        .head(15)
+        .fillna("")
+        .astype(str)
+        .to_dict(orient="records")
+    )
+    material_count = int(
+        merged[material_col]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .replace("", pd.NA)
+        .dropna()
+        .nunique()
+    )
+
+    return OrderItemPriceResult(
+        job_id=JOB_ID_ORDER_ITEM,
+        row_count=len(merged),
+        material_count=material_count,
+        file_count=len(frames),
+        invalid_row_count=int((~valid).sum()),
+        source_files=[name for name, _ in frames],
+        files={"order_item_price": output_path},
         preview=preview,
     )

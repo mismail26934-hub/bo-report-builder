@@ -1,6 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { downloadUrl } from "./api/boReport";
-import { useFolders, useProcessPartviz, useProcessReport } from "./hooks/useBoReport";
+import {
+  useFolders,
+  useProcessOrderItemPrice,
+  useProcessPartviz,
+  useProcessReport,
+} from "./hooks/useBoReport";
 
 function StatCard({ label, value }: { label: string; value: number | string }) {
   return (
@@ -28,10 +33,50 @@ function PreviewList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
+function PreviewTable({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Record<string, string>[];
+}) {
+  const columns = rows.length ? Object.keys(rows[0]) : [];
+  return (
+    <div className="preview-block">
+      <h3>{title}</h3>
+      {rows.length ? (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th key={column}>{column}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={`preview-${index}`}>
+                  {columns.map((column) => (
+                    <td key={column}>{row[column]}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="muted">Tidak ada data</p>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const folders = useFolders();
   const processMutation = useProcessReport();
   const partvizMutation = useProcessPartviz();
+  const orderItemMutation = useProcessOrderItemPrice();
 
   const [salesOffice, setSalesOffice] = useState("0G38");
   const [plant, setPlant] = useState("1G38");
@@ -42,6 +87,11 @@ export default function App() {
 
   const [partvizSource, setPartvizSource] = useState<"folder" | "upload">("folder");
   const [partvizFiles, setPartvizFiles] = useState<FileList | null>(null);
+  const [orderItemSource, setOrderItemSource] = useState<"folder" | "upload">(
+    "folder",
+  );
+  const [orderItemFiles, setOrderItemFiles] = useState<FileList | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     if (folders.data?.default_sales_office) {
@@ -79,8 +129,17 @@ export default function App() {
     });
   }
 
+  function onOrderItemSubmit(e: FormEvent) {
+    e.preventDefault();
+    orderItemMutation.mutate({
+      source: orderItemSource,
+      orderItemFiles,
+    });
+  }
+
   const result = processMutation.data;
   const partvizResult = partvizMutation.data;
+  const orderItemResult = orderItemMutation.data;
 
   return (
     <div className="page">
@@ -93,6 +152,7 @@ export default function App() {
           <code>Plant</code> → unique <code>Sales document</code>. Gabungkan
           keduanya (remove duplicate), plus bandingkan matched / only PSC /
           only SAP. Juga gabungkan & urutkan Excel PartViz berdasarkan milestone.
+          Hitung harga per Material dari SAP ZVSD Parts Progress Order Item.
         </p>
       </header>
 
@@ -256,14 +316,25 @@ export default function App() {
                 </a>
               </div>
 
-              <div className="preview-grid">
-                <PreviewList title="Preview gabungan unik" items={result.preview.combined ?? []} />
-                <PreviewList title="Preview SO (PSC)" items={result.preview.psc_so ?? []} />
-                <PreviewList title="Preview Sales document" items={result.preview.sap_doc ?? []} />
-                <PreviewList title="Preview matched" items={result.preview.matched ?? []} />
-                <PreviewList title="Preview only PSC" items={result.preview.only_psc ?? []} />
-                <PreviewList title="Preview only SAP" items={result.preview.only_sap ?? []} />
-              </div>
+              <button
+                type="button"
+                className="toggle"
+                aria-expanded={showPreview}
+                onClick={() => setShowPreview((visible) => !visible)}
+              >
+                {showPreview ? "Sembunyikan preview" : "Tampilkan preview"}
+              </button>
+
+              {showPreview && (
+                <div className="preview-grid">
+                  <PreviewList title="Preview gabungan unik" items={result.preview.combined ?? []} />
+                  <PreviewList title="Preview SO (PSC)" items={result.preview.psc_so ?? []} />
+                  <PreviewList title="Preview Sales document" items={result.preview.sap_doc ?? []} />
+                  <PreviewList title="Preview matched" items={result.preview.matched ?? []} />
+                  <PreviewList title="Preview only PSC" items={result.preview.only_psc ?? []} />
+                  <PreviewList title="Preview only SAP" items={result.preview.only_sap ?? []} />
+                </div>
+              )}
             </>
           )}
         </section>
@@ -389,33 +460,139 @@ export default function App() {
                   </a>
                 </div>
 
-                <div className="preview-block">
-                  <h3>Preview (15 baris pertama)</h3>
-                  {partvizResult.preview.length ? (
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            {Object.keys(partvizResult.preview[0]).map((col) => (
-                              <th key={col}>{col}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {partvizResult.preview.map((row, idx) => (
-                            <tr key={`pv-${idx}`}>
-                              {Object.keys(partvizResult.preview[0]).map((col) => (
-                                <td key={col}>{row[col]}</td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                <PreviewList
+                  title="Preview milestone (unik & urut)"
+                  items={partvizResult.preview ?? []}
+                />
+              </>
+            )}
+          </section>
+        </div>
+      </section>
+
+      <section className="feature-block">
+        <header className="feature-header">
+          <h2>Order Item — Harga per Material</h2>
+          <p className="muted">
+            Gabungkan multiple Excel SAP ZVSD Parts Progress Order Item dan
+            hitung <code>(Parts Selling Price - ABS(Discount Total)) / Order Quantity</code>.
+          </p>
+        </header>
+
+        <div className="layout">
+          <section className="panel">
+            <h2>Proses Order Item</h2>
+            <form className="form" onSubmit={onOrderItemSubmit}>
+              <fieldset>
+                <legend>Sumber data</legend>
+                <label className="radio">
+                  <input
+                    type="radio"
+                    name="order-item-source"
+                    checked={orderItemSource === "folder"}
+                    onChange={() => setOrderItemSource("folder")}
+                  />
+                  Folder server (`data-sap-zvsd_parts_progress-order_item`)
+                </label>
+                <label className="radio">
+                  <input
+                    type="radio"
+                    name="order-item-source"
+                    checked={orderItemSource === "upload"}
+                    onChange={() => setOrderItemSource("upload")}
+                  />
+                  Upload multiple file Excel
+                </label>
+              </fieldset>
+
+              {orderItemSource === "folder" ? (
+                <div className="folder-info">
+                  {folders.isLoading && (
+                    <p className="muted">Memuat daftar file…</p>
+                  )}
+                  {folders.data && (
+                    <div>
+                      <strong>SAP ZVSD Parts Progress — Order Item</strong>
+                      <ul>
+                        {folders.data.order_item_files?.length ? (
+                          folders.data.order_item_files.map((file) => (
+                            <li key={file}>{file}</li>
+                          ))
+                        ) : (
+                          <li className="muted">Kosong</li>
+                        )}
+                      </ul>
                     </div>
-                  ) : (
-                    <p className="muted">Tidak ada data</p>
                   )}
                 </div>
+              ) : (
+                <div className="uploads">
+                  <label>
+                    File Order Item (.xlsx) — multiple
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls"
+                      multiple
+                      onChange={(e) => setOrderItemFiles(e.target.files)}
+                      required={orderItemSource === "upload"}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <button type="submit" disabled={orderItemMutation.isPending}>
+                {orderItemMutation.isPending
+                  ? "Menghitung…"
+                  : "Gabung & hitung harga"}
+              </button>
+              {orderItemMutation.isError && (
+                <p className="error">
+                  {(orderItemMutation.error as Error).message}
+                </p>
+              )}
+            </form>
+          </section>
+
+          <section className="panel">
+            <h2>Hasil Harga per Material</h2>
+            {!orderItemResult && !orderItemMutation.isPending && (
+              <p className="muted">
+                Belum ada hasil. Jalankan proses untuk melihat ringkasan.
+              </p>
+            )}
+            {orderItemMutation.isPending && (
+              <p className="muted">
+                Membaca, menggabungkan, dan menghitung harga…
+              </p>
+            )}
+            {orderItemResult && (
+              <>
+                <div className="stats">
+                  <StatCard label="Total baris" value={orderItemResult.row_count} />
+                  <StatCard
+                    label="Material unik"
+                    value={orderItemResult.material_count}
+                  />
+                  <StatCard label="File sumber" value={orderItemResult.file_count} />
+                  <StatCard
+                    label="Baris tidak valid"
+                    value={orderItemResult.invalid_row_count}
+                  />
+                </div>
+                <div className="downloads">
+                  <a
+                    href={downloadUrl(
+                      orderItemResult.downloads.order_item_price,
+                    )}
+                    download
+                  >
+                    Download harga per Material
+                  </a>
+                </div>
+                <PreviewTable
+                  title="Preview harga per Material (15 baris pertama)"
+                  rows={orderItemResult.preview ?? []}
+                />
               </>
             )}
           </section>

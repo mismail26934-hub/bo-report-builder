@@ -10,11 +10,13 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.services.excel_service import (
     OUTPUT_COMPARE,
+    OUTPUT_ORDER_ITEM_PRICE,
     OUTPUT_PARTVIZ_MERGED,
     OUTPUT_PSC_SO,
     OUTPUT_SAP_DOC,
     list_excel_files,
     process_dataframes,
+    process_order_item_price_dataframes,
     process_partviz_dataframes,
     read_excel_source,
 )
@@ -29,9 +31,11 @@ class FolderInfo(BaseModel):
     psc_dir: str
     sap_dir: str
     partviz_dir: str
+    order_item_dir: str
     psc_files: list[str]
     sap_files: list[str]
     partviz_files: list[str]
+    order_item_files: list[str]
     default_sales_office: str
     default_plant: str
     default_exclude_part_numbers: str
@@ -64,6 +68,17 @@ class PartvizProcessResponse(BaseModel):
     milestone_counts: dict[str, int]
     unknown_milestone_count: int
     downloads: dict[str, str]
+    preview: list[str] = Field(default_factory=list)
+
+
+class OrderItemPriceProcessResponse(BaseModel):
+    job_id: str
+    row_count: int
+    material_count: int
+    file_count: int
+    invalid_row_count: int
+    source_files: list[str]
+    downloads: dict[str, str]
     preview: list[dict[str, str]] = Field(default_factory=list)
 
 
@@ -77,13 +92,16 @@ def get_folders() -> FolderInfo:
     psc_dir = settings.resolved_psc_dir
     sap_dir = settings.resolved_sap_dir
     partviz_dir = settings.resolved_partviz_dir
+    order_item_dir = settings.resolved_order_item_dir
     return FolderInfo(
         psc_dir=str(psc_dir),
         sap_dir=str(sap_dir),
         partviz_dir=str(partviz_dir),
+        order_item_dir=str(order_item_dir),
         psc_files=[p.name for p in list_excel_files(psc_dir)],
         sap_files=[p.name for p in list_excel_files(sap_dir)],
         partviz_files=[p.name for p in list_excel_files(partviz_dir)],
+        order_item_files=[p.name for p in list_excel_files(order_item_dir)],
         default_sales_office=settings.default_sales_office,
         default_plant=settings.default_plant,
         default_exclude_part_numbers=settings.default_exclude_part_numbers,
@@ -254,6 +272,63 @@ async def process_partviz(
     )
 
 
+@router.post("/order-item-price/process", response_model=OrderItemPriceProcessResponse)
+async def process_order_item_price(
+    source: Annotated[str, Form()] = "folder",
+    order_item_files: list[UploadFile] | None = File(default=None),
+) -> OrderItemPriceProcessResponse:
+    try:
+        if source == "upload":
+            if not order_item_files:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Upload mode membutuhkan minimal satu file Order Item.",
+                )
+            frames = await _read_uploads(order_item_files)
+        else:
+            paths = list_excel_files(settings.resolved_order_item_dir)
+            if not paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Folder data-sap-zvsd_parts_progress-order_item kosong."
+                    ),
+                )
+            frames = [(p.name, read_excel_source(p)) for p in paths]
+
+        result = process_order_item_price_dataframes(
+            frames=frames,
+            output_dir=settings.resolved_output_dir,
+        )
+    except HTTPException:
+        raise
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal memproses harga Order Item: {exc}",
+        ) from exc
+
+    JOBS[result.job_id] = result.files
+    downloads = {
+        key: f"/api/download/{result.job_id}/{key}"
+        for key in result.files
+    }
+    return OrderItemPriceProcessResponse(
+        job_id=result.job_id,
+        row_count=result.row_count,
+        material_count=result.material_count,
+        file_count=result.file_count,
+        invalid_row_count=result.invalid_row_count,
+        source_files=result.source_files,
+        downloads=downloads,
+        preview=result.preview,
+    )
+
+
 @router.get("/download/{job_id}/{kind}")
 def download_result(job_id: str, kind: str) -> FileResponse:
     job = JOBS.get(job_id)
@@ -266,6 +341,7 @@ def download_result(job_id: str, kind: str) -> FileResponse:
             "sap_doc": OUTPUT_SAP_DOC,
             "compare": OUTPUT_COMPARE,
             "partviz_merged": OUTPUT_PARTVIZ_MERGED,
+            "order_item_price": OUTPUT_ORDER_ITEM_PRICE,
         }
         name = fixed.get(kind)
         if not name:

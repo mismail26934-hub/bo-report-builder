@@ -2,9 +2,11 @@ export type FolderInfo = {
   psc_dir: string;
   sap_dir: string;
   partviz_dir: string;
+  order_item_dir: string;
   psc_files: string[];
   sap_files: string[];
   partviz_files: string[];
+  order_item_files: string[];
   default_sales_office: string;
   default_plant: string;
   default_exclude_part_numbers: string;
@@ -36,6 +38,17 @@ export type PartvizProcessResponse = {
   milestone_order: string[];
   milestone_counts: Record<string, number>;
   unknown_milestone_count: number;
+  downloads: Record<string, string>;
+  preview: string[];
+};
+
+export type OrderItemPriceProcessResponse = {
+  job_id: string;
+  row_count: number;
+  material_count: number;
+  file_count: number;
+  invalid_row_count: number;
+  source_files: string[];
   downloads: Record<string, string>;
   preview: Record<string, string>[];
 };
@@ -115,6 +128,35 @@ export async function processPartviz(
   }
 
   const res = await fetch(`${API_BASE}/api/partviz/process`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export type OrderItemPriceProcessPayload = {
+  source: "folder" | "upload";
+  orderItemFiles?: FileList | null;
+};
+
+export async function processOrderItemPrice(
+  payload: OrderItemPriceProcessPayload,
+): Promise<OrderItemPriceProcessResponse> {
+  const form = new FormData();
+  form.append("source", payload.source);
+
+  if (payload.source === "upload") {
+    if (!payload.orderItemFiles?.length) {
+      throw new Error("Upload mode membutuhkan minimal satu file Order Item.");
+    }
+    Array.from(payload.orderItemFiles).forEach((file) =>
+      form.append("order_item_files", file),
+    );
+  }
+
+  const res = await fetch(`${API_BASE}/api/order-item-price/process`, {
     method: "POST",
     body: form,
   });

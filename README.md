@@ -1,6 +1,6 @@
 # BO Report
 
-Aplikasi web untuk filter dan bandingkan Back Order dari data **PSC** dan **SAP ZMMM Open BO**, serta gabungkan & urutkan Excel **PartViz** berdasarkan milestone.
+Aplikasi web untuk filter dan bandingkan Back Order dari data **PSC** dan **SAP ZMMM Open BO**, gabungkan & urutkan Excel **PartViz**, serta menghitung harga per Material dari **SAP ZVSD Parts Progress Order Item**.
 
 ## Alur proses — PSC × SAP
 
@@ -89,6 +89,34 @@ Setiap proses **menimpa** file tetap di `output/`:
 
 ---
 
+## Alur proses — Order Item Price
+
+### 1. Sumber data
+
+| Mode | Keterangan |
+|------|------------|
+| Folder server | Membaca semua `.xlsx` / `.xls` di `data-sap-zvsd_parts_progress-order_item` |
+| Upload | User mengunggah multiple file Order Item dari browser |
+
+### 2. Gabungkan & hitung
+
+1. Gabungkan semua baris dari file sumber.
+2. Hitung kolom `Price per Material` untuk setiap order item:
+
+   `(Parts Selling Price - ABS(Discount Total)) / Order Quantity`
+
+3. Baris dengan nilai bukan angka atau `Order Quantity = 0` tidak dihitung dan dicatat sebagai baris tidak valid.
+
+### 3. Download hasil
+
+Setiap proses menimpa file tetap berikut:
+
+| File | Isi |
+|------|-----|
+| `order_item_price_per_material.xlsx` | Data Order Item lengkap dengan kolom `Source File` dan `Price per Material` |
+
+---
+
 ## Stack
 
 - **Frontend:** React + Vite + TypeScript + TanStack Query
@@ -103,6 +131,7 @@ bo-report/
 ├── data-psc/
 ├── data-sap-zmmm_open_bo/
 ├── data-partviz/
+├── data-sap-zvsd_parts_progress-order_item/
 ├── output/
 └── docker-compose.yml
 ```
@@ -145,7 +174,7 @@ docker compose up --build -d
 - Web: http://server-ip:8080
 - API: http://server-ip:8000
 
-Pastikan folder `data-psc`, `data-sap-zmmm_open_bo`, dan `data-partviz` berisi file Excel di server.
+Pastikan folder `data-psc`, `data-sap-zmmm_open_bo`, `data-partviz`, dan `data-sap-zvsd_parts_progress-order_item` berisi file Excel di server.
 
 ## Field UI
 
@@ -164,3 +193,10 @@ Pastikan folder `data-psc`, `data-sap-zmmm_open_bo`, dan `data-partviz` berisi f
 |------|---------|------------|
 | Sumber data | Folder server | `data-partviz` atau upload multiple Excel |
 | Urutan Milestone | tetap | Cancelled → Griefed → ESD Needed → Future Dated → ESD Available → Sourced → Shipped |
+
+### Order Item Price
+
+| Field | Default | Keterangan |
+|------|---------|------------|
+| Sumber data | Folder server | `data-sap-zvsd_parts_progress-order_item` atau upload multiple Excel |
+| Rumus | tetap | `(Parts Selling Price - ABS(Discount Total)) / Order Quantity` |
