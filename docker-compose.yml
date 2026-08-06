@@ -15,6 +15,7 @@ services:
       - ./data-sap-zmmm_stock_info:/app/data-sap-zmmm_stock_info
       - ./data-sap-zmmm_stock_info-hub:/app/data-sap-zmmm_stock_info-hub
       - ./data-sap-zmpu_po_moni:/app/data-sap-zmpu_po_moni
+      - ./guide-bo-report:/app/guide-bo-report:ro
       - ./output:/app/output
     environment:
       CORS_ORIGINS: "*"

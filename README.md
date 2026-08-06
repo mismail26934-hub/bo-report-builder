@@ -8,9 +8,9 @@ Aplikasi web untuk filter dan bandingkan Back Order dari data **PSC** dan **SAP 
 
 Pilih salah satu mode:
 
-| Mode          | Keterangan                                                             |
-| ------------- | ---------------------------------------------------------------------- |
-| Folder server | Membaca semua `.xlsx` / `.xls` di `data-psc` & `data-sap-zmmm_open_bo` |
+| Mode          | Keterangan                                                                                                  |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| Folder server | Membaca semua `.xlsx` / `.xls` di `data-psc` & `data-sap-zmmm_open_bo`                                      |
 | Upload        | Upload file → file lama dipindah ke `backup/<timestamp>/`, file baru disimpan ke folder data, lalu diproses |
 
 ### 2. Filter PSC — Sales Office
@@ -68,9 +68,9 @@ Setiap proses **menimpa** file tetap di `output/` (hasil sebelumnya diganti):
 
 Pilih salah satu mode:
 
-| Mode          | Keterangan                                         |
-| ------------- | -------------------------------------------------- |
-| Folder server | Membaca semua `.xlsx` / `.xls` di `data-partviz`   |
+| Mode          | Keterangan                                                                 |
+| ------------- | -------------------------------------------------------------------------- |
+| Folder server | Membaca semua `.xlsx` / `.xls` di `data-partviz`                           |
 | Upload        | Upload → backup file lama, simpan file baru ke `data-partviz`, lalu proses |
 
 ### 2. Gabungkan & urutkan
@@ -145,8 +145,8 @@ Setiap proses menimpa file tetap berikut:
 
 ### 3. Download hasil
 
-| File                              | Isi                                                                                              |
-| --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| File                              | Isi                                                                                             |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `purchasing_document_unique.xlsx` | Sheet `Purchasing Document` unik dan sheet `Material` unik dengan `Reason for rejection` kosong |
 
 Setiap proses menimpa file hasil sebelumnya.
@@ -177,6 +177,7 @@ bo-report/
 ├── data-sap-zmmm_stock_info/
 ├── data-sap-zmmm_stock_info-hub/
 ├── data-sap-zmpu_po_moni/
+├── guide-bo-report/
 ├── output/
 └── docker-compose.yml
 ```
@@ -235,28 +236,94 @@ Untuk semua fitur proses (PSC×SAP, PartViz, Order Item, Source Item) dan **Uplo
 
 Upload saja (belum ada transform) ke folder:
 
-| Dataset | Folder |
-| ------- | ------ |
-| Estimasi | `data-estimasi` |
-| BO Last | `data-bo-last` |
-| SAP ZMIM CPAvail | `data-sap-zmim_cpavail` |
-| SAP ZMMM Stock Info | `data-sap-zmmm_stock_info` |
+| Dataset                 | Folder                         |
+| ----------------------- | ------------------------------ |
+| Estimasi                | `data-estimasi`                |
+| BO Last                 | `data-bo-last`                 |
+| SAP ZMIM CPAvail        | `data-sap-zmim_cpavail`        |
+| SAP ZMMM Stock Info     | `data-sap-zmmm_stock_info`     |
 | SAP ZMMM Stock Info Hub | `data-sap-zmmm_stock_info-hub` |
-| SAP ZMPU PO Moni | `data-sap-zmpu_po_moni` |
+| SAP ZMPU PO Moni        | `data-sap-zmpu_po_moni`        |
 
 API: `POST /api/data-upload/{dataset_key}` dengan form field `files`.
+
+---
+
+## Alur — Generate BO Report (Guide)
+
+1. Baca template `guide-bo-report/Guide BO Report.xlsx` (sheet **Guide** + **Data Template**).
+2. Base baris dari semua Excel di `data-sap-zvsd_parts_progress-source_item`.
+3. **Exclude** baris dengan `Order Quantity = OD Quantity`.
+4. **Exclude** baris `Material No = DELIVERY_CHARGE:ZZ`.
+5. **Exclude** baris dengan `Reason for rejection` tidak kosong (hanya baris blank yang diproses).
+6. Isi kolom sesuai mapping Guide (copy dari folder / VLOOKUP / rumus `RIGHT`/`LEFT`), termasuk field tambahan OD / Gate Pass / Storage Location / Reason for rejection / OD Item of Sales Order Item / `1G38` / Action.
+7. Format kolom tanggal ke `dd-mmm-yyyy` (contoh `14-Aug-2026`).
+8. **Remove duplicate** baris yang sama (keep first) pada field:
+   - `Sales document`
+   - `Sales Document Item`
+   - `Material No`
+   - `Order Quantity`
+   - `OD of Sales Order Item`
+   - `OD Item of Sales Order Item`
+   - `OD Quantity`
+9. **Remove / exclude** baris jika `Order Quantity = Total OD Quantity` dalam group:
+   - `Sales document`
+   - `Sales Document Item`
+   - `Material No`
+   - `Order Quantity`
+   - `Total OD Quantity` = `SUM(OD Quantity)` per group (contoh: Order Qty 2 dan total OD 2 → dihapus).
+10. **Isi field Action** (Else-If first-match, urutan tetap):
+   1. `BORD` + PO blank → `Review & Submit BO`
+   2. `Order Quantity < Total OD Quantity` → `Cek Anomali (Possible double supply)`
+      (contoh: Order Qty 2, total OD 4)
+   3. `Milestone = Griefed` → `Griefed. Cek Antares EZ40`
+   4. `Milestone = Cancelled` → `Cancelled. Cek Antares EZ40`
+   5. `Milestone = ESD Needed` → `Uplift to CPRO or Emergency`
+   6. Milestone blank + `PO Created Date = Today` (date-only) → `Wait Transmit to CAT`
+   7. Milestone blank + `PO Created Date < Today` → `Failed Transmit to CAT and Cek Antares EZ40`
+   8. `BORD` + PO terisi + `1G38 > Order Quantity` → `BO Fill From Stock`
+   9. `BORD` + PO terisi + `1G38 > 0` → `BO Fill From Stock Partial`
+   10. `DMDV` + PO blank + `1G38 > 0` → `ReBO to stock`
+   11. `DMDV` + PO blank + `1S67/66/76/81 > 0` → `ReBO to 1Sxx`
+   12. `BORD`/`DMDV` + PO blank + `Order Quantity <= 1S67/66/76/81` → `ReBO to 1Sxx`
+   13. `BORD`/`DMDV` + PO terisi + `Order Quantity <= 1S67/66/76/81` → `Request STO from 1Sxx`
+   14. Storage blank → `Cek & Create OD & F/u GI`
+   15. `Class = ON-ORDER` → `Cek On-Order`
+   16. `Class = ON-HAND` + hub `1S66/67/76/81 = 0` → `ReBO to CAT & Cek Availability Incountry`
+   17. `Deletion indicator` tidak blank → `PO Possible Delete / BO Cancelled`
+   18. Vendor `1000085` / CATERPILLAR ASIA DELIVERY CENTER + Milestone Shipped → `Keep Monitor`
+   19. Agreement Type CPRO + Milestone Sourced + `Shp By Dt - TODAY = 27` (hari) → `Request Early Invoice`
+   20. Milestone Sourced + `SNG > Order Quantity` → `Keep Monitor (Milestone Sourced)`
+   21. Milestone Sourced + `SNG < Order Quantity` → `F/u invoice (Milestone Sourced)`
+   22. Milestone ESD Available + `Order Quantity <= (SNG+Mell+QNS+SAG)` → `Fu/Keep Monitor`
+   23. Class TRANSFER + Shipment Number terisi → `Keep Monitor (BO Incountry)`
+   24. Class TRANSFER + Shipment Number blank → `F/u BR`
+   25. Milestone Shipped → `Keep Monitor (Milestone Shipped)`
+   26. Milestone ESD Available → `Keep Monitor (Milestone ESD Available)`
+   27. Milestone blank + PO terisi → `Possible Failed Transmit to CAT and Cek Antares EZ40`
+   28. Milestone Sourced + PO terisi → `F/u invoice (Milestone Sourced)`
+   29. Else → kosong
+   - Field `Deletion indicator` di-copy dari Source Item ke Data Template.
+11. **Convert ke number** field:
+   - `Total Price`, `Order Quantity`, `PO Quantity`
+   - `SNG`, `Mell`, `QNS`, `SAG`, `ETA D`
+   - `1S67`, `1S66`, `1S76`, `1S81`, `OD Quantity`, `1G38`
+12. Sumber pendukung: Parts Progress, PO Moni, CPAvail, Stock Info, Stock Info Hub, Estimasi, BO Last, plus `output/partviz_merged.xlsx` dan `output/order_item_price_per_material.xlsx`.
+13. Output: `output/bo_report.xlsx` (sheet Data Template terisi + sheet Guide).
+
+API: `POST /api/bo-guide/process`
 
 ## Field UI
 
 ### PSC × SAP
 
-| Field               | Default              | Keterangan                                |
-| ------------------- | -------------------- | ----------------------------------------- |
-| Sales Office (PSC)  | `0G38`               | Filter PSC                                |
-| Plant (SAP)         | `1G38`               | Filter SAP; multi value OK                |
-| Exclude part number | `DELIVERY_CHARGE:ZZ` | Exclude `Material No` SAP; multi value OK |
+| Field               | Default              | Keterangan                                     |
+| ------------------- | -------------------- | ---------------------------------------------- |
+| Sales Office (PSC)  | `0G38`               | Filter PSC                                     |
+| Plant (SAP)         | `1G38`               | Filter SAP; multi value OK                     |
+| Exclude part number | `DELIVERY_CHARGE:ZZ` | Exclude `Material No` SAP; multi value OK      |
 | Exclude SO_Number   | Excel folder         | CRUD di UI → `data-so-exclude/so_exclude.xlsx` |
-| Sumber data         | Folder server        | Folder atau upload Excel                  |
+| Sumber data         | Folder server        | Folder atau upload Excel                       |
 
 ### PartViz
 

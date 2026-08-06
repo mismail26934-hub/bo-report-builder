@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { downloadUrl } from "./api/boReport";
 import { DataUploadSection } from "./components/DataUploadSection";
+import { BoGuideSection } from "./components/BoGuideSection";
 import { SoExcludePanel } from "./components/SoExcludePanel";
 import {
   useFolders,
@@ -827,6 +828,8 @@ export default function App() {
           </section>
         </div>
       </section>
+
+      <BoGuideSection />
 
       <DataUploadSection />
     </div>

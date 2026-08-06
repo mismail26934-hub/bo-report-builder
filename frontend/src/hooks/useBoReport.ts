@@ -8,6 +8,7 @@ import {
   processPartviz,
   processProgressSource,
   processReport,
+  processBoGuide,
   updateSoExclude,
   uploadDataFiles,
   type OrderItemPriceProcessPayload,
@@ -109,5 +110,11 @@ export function useProcessProgressSource() {
   return useMutation({
     mutationFn: (payload: ProgressSourceProcessPayload) =>
       processProgressSource(payload),
+  });
+}
+
+export function useProcessBoGuide() {
+  return useMutation({
+    mutationFn: () => processBoGuide(),
   });
 }

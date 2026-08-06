@@ -38,6 +38,10 @@ from app.services.data_upload_service import (
     list_data_upload_datasets,
     resolve_data_upload_dir,
 )
+from app.services.bo_guide_service import (
+    OUTPUT_BO_REPORT,
+    generate_bo_report,
+)
 
 
 router = APIRouter(prefix="/api", tags=["bo-report"])
@@ -162,6 +166,21 @@ class ProgressSourceProcessResponse(BaseModel):
     downloads: dict[str, str]
     preview: list[str] = Field(default_factory=list)
     material_preview: list[str] = Field(default_factory=list)
+
+
+class BoGuideProcessResponse(BaseModel):
+    job_id: str
+    row_count: int
+    excluded_qty_equal_count: int
+    excluded_delivery_charge_count: int = 0
+    excluded_rejection_count: int = 0
+    excluded_exact_duplicate_count: int = 0
+    excluded_duplicate_count: int = 0
+    source_item_files: list[str]
+    guide_path: str
+    missing_sources: list[str] = Field(default_factory=list)
+    downloads: dict[str, str]
+    preview: list[dict[str, str]] = Field(default_factory=list)
 
 
 @router.get("/health")
@@ -702,6 +721,44 @@ async def process_progress_source(
     )
 
 
+@router.post("/bo-guide/process", response_model=BoGuideProcessResponse)
+def process_bo_guide() -> BoGuideProcessResponse:
+    try:
+        result = generate_bo_report(
+            project_root=settings.project_root,
+            output_dir=settings.resolved_output_dir,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal generate BO Report: {exc}",
+        ) from exc
+
+    JOBS[result.job_id] = result.files
+    downloads = {
+        key: f"/api/download/{result.job_id}/{key}"
+        for key in result.files
+    }
+    return BoGuideProcessResponse(
+        job_id=result.job_id,
+        row_count=result.row_count,
+        excluded_qty_equal_count=result.excluded_qty_equal_count,
+        excluded_delivery_charge_count=result.excluded_delivery_charge_count,
+        excluded_rejection_count=result.excluded_rejection_count,
+        excluded_exact_duplicate_count=result.excluded_exact_duplicate_count,
+        excluded_duplicate_count=result.excluded_duplicate_count,
+        source_item_files=result.source_item_files,
+        guide_path=result.guide_path,
+        missing_sources=result.missing_sources,
+        downloads=downloads,
+        preview=result.preview,
+    )
+
+
 @router.get("/download/{job_id}/{kind}")
 def download_result(job_id: str, kind: str) -> FileResponse:
     job = JOBS.get(job_id)
@@ -716,6 +773,7 @@ def download_result(job_id: str, kind: str) -> FileResponse:
             "partviz_merged": OUTPUT_PARTVIZ_MERGED,
             "order_item_price": OUTPUT_ORDER_ITEM_PRICE,
             "purchasing_document": OUTPUT_PURCHASING_DOCUMENT,
+            "bo_report": OUTPUT_BO_REPORT,
         }
         name = fixed.get(kind)
         if not name:

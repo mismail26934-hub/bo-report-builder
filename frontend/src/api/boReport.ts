@@ -117,6 +117,21 @@ export type ProgressSourceProcessResponse = {
   material_preview: string[];
 };
 
+export type BoGuideProcessResponse = {
+  job_id: string;
+  row_count: number;
+  excluded_qty_equal_count: number;
+  excluded_delivery_charge_count: number;
+  excluded_rejection_count: number;
+  excluded_exact_duplicate_count: number;
+  excluded_duplicate_count: number;
+  source_item_files: string[];
+  guide_path: string;
+  missing_sources: string[];
+  downloads: Record<string, string>;
+  preview: Record<string, string>[];
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function parseError(res: Response): Promise<string> {
@@ -331,6 +346,14 @@ export async function processProgressSource(
     body: form,
   });
 
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function processBoGuide(): Promise<BoGuideProcessResponse> {
+  const res = await fetch(`${API_BASE}/api/bo-guide/process`, {
+    method: "POST",
+  });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
