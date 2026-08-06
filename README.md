@@ -136,11 +136,12 @@ Setiap proses menimpa file tetap berikut:
 ### 2. Filter & remove duplicate
 
 1. Gabungkan semua file Source Item.
-2. Ambil kolom `Purchasing Document`.
-3. Buang nilai kosong dan remove duplicate.
-4. Filter baris dengan `Reason for rejection` kosong.
-5. Ambil kolom `Material`, buang nilai kosong, lalu remove duplicate.
-6. File Parts Progress dibaca dan divalidasi sebagai dataset pasangan; kolom `Purchasing Document` hanya tersedia di Source Item.
+2. Exclude baris dengan `Order Quantity = OD Quantity` (keduanya harus angka valid).
+3. Ambil kolom `Purchasing Document`.
+4. Buang nilai kosong dan remove duplicate.
+5. Filter baris dengan `Reason for rejection` kosong.
+6. Ambil kolom `Material`, buang nilai kosong, lalu remove duplicate.
+7. File Parts Progress dibaca dan divalidasi sebagai dataset pasangan; kolom `Purchasing Document` hanya tersedia di Source Item.
 
 ### 3. Download hasil
 

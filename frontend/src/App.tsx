@@ -654,8 +654,9 @@ export default function App() {
         <header className="feature-header">
           <h2>Parts Progress — Purchasing Document</h2>
           <p className="muted">
-            Gabungkan multiple Excel Source Item dan Parts Progress, lalu ambil
-            unique <code>Purchasing Document</code> dari Source Item.
+            Gabungkan multiple Excel Source Item dan Parts Progress, exclude
+            baris Source Item dengan <code>Order Quantity = OD Quantity</code>,
+            lalu ambil unique <code>Purchasing Document</code> dari Source Item.
           </p>
         </header>
 
@@ -777,12 +778,16 @@ export default function App() {
               <>
                 <div className="stats">
                   <StatCard
-                    label="Baris dengan Purchasing Document"
+                    label="Baris Source Item"
                     value={progressSourceResult.source_item_row_count}
                   />
                   <StatCard
                     label="Baris Parts Progress"
                     value={progressSourceResult.parts_progress_row_count}
+                  />
+                  <StatCard
+                    label="Exclude Qty = OD Qty"
+                    value={progressSourceResult.excluded_qty_equal_count}
                   />
                   <StatCard
                     label="Purchasing Document unik"
@@ -793,6 +798,10 @@ export default function App() {
                     value={progressSourceResult.material_count}
                   />
                 </div>
+                <p className="muted">
+                  Baris Source Item dengan <code>Order Quantity = OD Quantity</code>{" "}
+                  dibuang sebelum ambil unique.
+                </p>
                 <div className="downloads">
                   <a
                     href={downloadUrl(

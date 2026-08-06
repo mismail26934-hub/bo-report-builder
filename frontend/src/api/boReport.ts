@@ -109,6 +109,7 @@ export type ProgressSourceProcessResponse = {
   parts_progress_row_count: number;
   purchasing_document_count: number;
   material_count: number;
+  excluded_qty_equal_count: number;
   source_item_files: string[];
   parts_progress_files: string[];
   downloads: Record<string, string>;

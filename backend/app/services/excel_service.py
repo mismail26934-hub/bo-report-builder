@@ -488,11 +488,21 @@ class ProgressSourceResult:
     parts_progress_row_count: int
     purchasing_document_count: int
     material_count: int
+    excluded_qty_equal_count: int
     source_item_files: list[str]
     parts_progress_files: list[str]
     files: dict[str, Path]
     preview: list[str]
     material_preview: list[str]
+
+
+SOURCE_ITEM_USECOLS = [
+    "Purchasing Document",
+    "Material",
+    "Reason for rejection",
+    "Order Quantity",
+    "OD Quantity",
+]
 
 
 def process_progress_source_dataframes(
@@ -513,6 +523,22 @@ def process_progress_source_dataframes(
         [frame for _, frame in parts_progress_frames],
         ignore_index=True,
     )
+    source_item_row_count = len(source_item_df)
+
+    order_qty_col = find_column(
+        source_item_df,
+        ["Order Quantity", "Order Qty", "Ordered Quantity", "ORDER_QUANTITY"],
+    )
+    od_qty_col = find_column(
+        source_item_df,
+        ["OD Quantity", "OD Qty", "Od Quantity", "OD_QUANTITY"],
+    )
+    order_qty = _to_numeric(source_item_df[order_qty_col])
+    od_qty = _to_numeric(source_item_df[od_qty_col])
+    qty_equal_mask = order_qty.notna() & od_qty.notna() & order_qty.eq(od_qty)
+    excluded_qty_equal_count = int(qty_equal_mask.sum())
+    source_item_df = source_item_df.loc[~qty_equal_mask].reset_index(drop=True)
+
     purchasing_document_col = find_column(
         source_item_df,
         [
@@ -562,10 +588,11 @@ def process_progress_source_dataframes(
 
     return ProgressSourceResult(
         job_id=JOB_ID_PROGRESS_SOURCE,
-        source_item_row_count=len(source_item_df),
+        source_item_row_count=source_item_row_count,
         parts_progress_row_count=len(parts_progress_df),
         purchasing_document_count=len(purchasing_documents),
         material_count=len(materials),
+        excluded_qty_equal_count=excluded_qty_equal_count,
         source_item_files=[name for name, _ in source_item_frames],
         parts_progress_files=[name for name, _ in parts_progress_frames],
         files={"purchasing_document": output_path},

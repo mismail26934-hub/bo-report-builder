@@ -15,6 +15,7 @@ from app.services.excel_service import (
     OUTPUT_PURCHASING_DOCUMENT,
     OUTPUT_PSC_SO,
     OUTPUT_SAP_DOC,
+    SOURCE_ITEM_USECOLS,
     list_excel_files,
     process_dataframes,
     process_order_item_price_dataframes,
@@ -155,6 +156,7 @@ class ProgressSourceProcessResponse(BaseModel):
     parts_progress_row_count: int
     purchasing_document_count: int
     material_count: int
+    excluded_qty_equal_count: int
     source_item_files: list[str]
     parts_progress_files: list[str]
     downloads: dict[str, str]
@@ -620,11 +622,7 @@ async def process_progress_source(
                 )
             source_item_frames = await _read_uploads(
                 source_item_files,
-                usecols=[
-                    "Purchasing Document",
-                    "Material",
-                    "Reason for rejection",
-                ],
+                usecols=SOURCE_ITEM_USECOLS,
                 persist_dir=settings.resolved_source_item_dir,
             )
             parts_progress_frames = await _read_uploads(
@@ -657,11 +655,7 @@ async def process_progress_source(
                     path.name,
                     read_excel_source(
                         path,
-                        usecols=[
-                            "Purchasing Document",
-                            "Material",
-                            "Reason for rejection",
-                        ],
+                        usecols=SOURCE_ITEM_USECOLS,
                     ),
                 )
                 for path in source_item_paths
@@ -699,6 +693,7 @@ async def process_progress_source(
         parts_progress_row_count=result.parts_progress_row_count,
         purchasing_document_count=result.purchasing_document_count,
         material_count=result.material_count,
+        excluded_qty_equal_count=result.excluded_qty_equal_count,
         source_item_files=result.source_item_files,
         parts_progress_files=result.parts_progress_files,
         downloads=downloads,
