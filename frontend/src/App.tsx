@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { downloadUrl } from "./api/boReport";
+import { SoExcludePanel } from "./components/SoExcludePanel";
 import {
   useFolders,
   useProcessOrderItemPrice,
@@ -168,10 +169,12 @@ export default function App() {
         <p className="lede">
           Filter PSC <code>Sales_Office</code> → unique <code>SO_Number</code>.
           Exclude SAP <code>Material No</code> (row-level), filter{" "}
-          <code>Plant</code> → unique <code>Sales document</code>. Gabungkan
-          keduanya (remove duplicate), plus bandingkan matched / only PSC /
-          only SAP. Juga gabungkan & urutkan Excel PartViz berdasarkan milestone.
-          Hitung harga per Material dari SAP ZVSD Parts Progress Order Item.
+          <code>Plant</code> → unique <code>Sales document</code>. Exclude{" "}
+          <code>SO_Number</code> dari Excel <code>data-so-exclude</code>.
+          Gabungkan keduanya (remove duplicate), plus bandingkan matched / only
+          PSC / only SAP. Juga gabungkan & urutkan Excel PartViz berdasarkan
+          milestone. Hitung harga per Material dari SAP ZVSD Parts Progress
+          Order Item.
         </p>
       </header>
 
@@ -260,6 +263,18 @@ export default function App() {
                         )}
                       </ul>
                     </div>
+                    <div>
+                      <strong>SO Exclude (`data-so-exclude`)</strong>
+                      <ul>
+                        {folders.data.so_exclude_files?.length ? (
+                          folders.data.so_exclude_files.map((f) => (
+                            <li key={f}>{f}</li>
+                          ))
+                        ) : (
+                          <li className="muted">Kosong</li>
+                        )}
+                      </ul>
+                    </div>
                   </>
                 )}
               </div>
@@ -296,6 +311,8 @@ export default function App() {
               <p className="error">{(processMutation.error as Error).message}</p>
             )}
           </form>
+
+          <SoExcludePanel />
         </section>
 
         <section className="panel">
@@ -313,6 +330,7 @@ export default function App() {
                 <StatCard label={`Sales doc unik (SAP Plant ${result.plant})`} value={result.sap_doc_count} />
                 <StatCard label="Gabungan unik" value={result.combined_count} />
                 <StatCard label="Baris SAP di-exclude" value={result.excluded_row_count} />
+                <StatCard label="SO di-exclude" value={result.excluded_so_count} />
                 <StatCard label="Matched" value={result.matched_count} />
                 <StatCard label="Only PSC" value={result.only_psc_count} />
                 <StatCard label="Only SAP" value={result.only_sap_count} />
@@ -320,6 +338,15 @@ export default function App() {
               {result.exclude_part_numbers ? (
                 <p className="muted">
                   Exclude Material No: <code>{result.exclude_part_numbers}</code>
+                </p>
+              ) : null}
+              {result.excluded_so_count > 0 ? (
+                <p className="muted">
+                  Exclude SO_Number:{" "}
+                  <code>
+                    {(result.excluded_so_preview ?? []).join(", ") ||
+                      `${result.excluded_so_count} SO`}
+                  </code>
                 </p>
               ) : null}
 
@@ -352,6 +379,10 @@ export default function App() {
                   <PreviewList title="Preview matched" items={result.preview.matched ?? []} />
                   <PreviewList title="Preview only PSC" items={result.preview.only_psc ?? []} />
                   <PreviewList title="Preview only SAP" items={result.preview.only_sap ?? []} />
+                  <PreviewList
+                    title="Preview SO di-exclude"
+                    items={result.preview.excluded_so ?? result.excluded_so_preview ?? []}
+                  />
                 </div>
               )}
             </>

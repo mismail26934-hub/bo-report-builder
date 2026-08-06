@@ -34,7 +34,14 @@ Pilih salah satu mode:
 - Hanya diterapkan pada data SAP
 - Ambil unique `Sales document`
 
-### 5. Gabungkan & bandingkan
+### 5. Exclude SO_Number — master Excel `data-so-exclude`
+
+- Baca semua `.xlsx` / `.xls` di folder `data-so-exclude`
+- Kolom: `SO_Number` (wajib), `PO`, `REMARK`
+- CRUD dari UI menulis ke file `so_exclude.xlsx`
+- SO yang ada di daftar dibuang dari unique PSC `SO_Number` **dan** unique SAP `Sales document` sebelum compare
+
+### 6. Gabungkan & bandingkan
 
 1. Gabungkan unique PSC `SO_Number` + unique SAP `Sales document`
 2. Remove duplicate → daftar **combined** (gabungan unik)
@@ -43,7 +50,7 @@ Pilih salah satu mode:
    - **only_psc** — hanya di PSC
    - **only_sap** — hanya di SAP
 
-### 6. Download hasil
+### 7. Download hasil
 
 Setiap proses **menimpa** file tetap di `output/` (hasil sebelumnya diganti):
 
@@ -162,6 +169,7 @@ bo-report/
 ├── data-sap-zvsd_parts_progress-order_item/
 ├── data-sap-zvsd_parts_progress-source_item/
 ├── data-sap-zvsd_parts_progress/
+├── data-so-exclude/
 ├── output/
 └── docker-compose.yml
 ```
@@ -215,6 +223,7 @@ Pastikan semua folder data yang tercantum pada struktur di atas berisi file Exce
 | Sales Office (PSC)  | `0G38`               | Filter PSC                                |
 | Plant (SAP)         | `1G38`               | Filter SAP; multi value OK                |
 | Exclude part number | `DELIVERY_CHARGE:ZZ` | Exclude `Material No` SAP; multi value OK |
+| Exclude SO_Number   | Excel folder         | CRUD di UI → `data-so-exclude/so_exclude.xlsx` |
 | Sumber data         | Folder server        | Folder atau upload Excel                  |
 
 ### PartViz

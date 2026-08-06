@@ -5,12 +5,14 @@ export type FolderInfo = {
   order_item_dir: string;
   source_item_dir: string;
   parts_progress_dir: string;
+  so_exclude_dir: string;
   psc_files: string[];
   sap_files: string[];
   partviz_files: string[];
   order_item_files: string[];
   source_item_files: string[];
   parts_progress_files: string[];
+  so_exclude_files: string[];
   default_sales_office: string;
   default_plant: string;
   default_exclude_part_numbers: string;
@@ -22,6 +24,8 @@ export type ProcessResponse = {
   plant: string;
   exclude_part_numbers: string;
   excluded_row_count: number;
+  excluded_so_count: number;
+  excluded_so_preview: string[];
   psc_so_count: number;
   sap_doc_count: number;
   combined_count: number;
@@ -32,6 +36,18 @@ export type ProcessResponse = {
   sap_files: string[];
   downloads: Record<string, string>;
   preview: Record<string, string[]>;
+};
+
+export type SoExcludeRow = {
+  SO_Number: string;
+  PO: string;
+  REMARK: string;
+};
+
+export type SoExcludePayload = {
+  SO_Number: string;
+  PO?: string;
+  REMARK?: string;
 };
 
 export type PartvizProcessResponse = {
@@ -89,6 +105,56 @@ export async function fetchFolders(): Promise<FolderInfo> {
   const res = await fetch(`${API_BASE}/api/folders`);
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
+}
+
+export async function fetchSoExclude(): Promise<SoExcludeRow[]> {
+  const res = await fetch(`${API_BASE}/api/so-exclude`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function createSoExclude(
+  payload: SoExcludePayload,
+): Promise<SoExcludeRow> {
+  const res = await fetch(`${API_BASE}/api/so-exclude`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      SO_Number: payload.SO_Number,
+      PO: payload.PO ?? "",
+      REMARK: payload.REMARK ?? "",
+    }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function updateSoExclude(
+  soNumber: string,
+  payload: SoExcludePayload,
+): Promise<SoExcludeRow> {
+  const res = await fetch(
+    `${API_BASE}/api/so-exclude/${encodeURIComponent(soNumber)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        SO_Number: payload.SO_Number,
+        PO: payload.PO ?? "",
+        REMARK: payload.REMARK ?? "",
+      }),
+    },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function deleteSoExclude(soNumber: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/api/so-exclude/${encodeURIComponent(soNumber)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
 }
 
 export type ProcessPayload = {

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     order_item_dir: Path | None = None
     source_item_dir: Path | None = None
     parts_progress_dir: Path | None = None
+    so_exclude_dir: Path | None = None
     output_dir: Path | None = None
     default_sales_office: str = "0G38"
     default_plant: str = "1G38"
@@ -50,6 +51,12 @@ class Settings(BaseSettings):
         return self.parts_progress_dir or (
             self.project_root / "data-sap-zvsd_parts_progress"
         )
+
+    @property
+    def resolved_so_exclude_dir(self) -> Path:
+        path = self.so_exclude_dir or (self.project_root / "data-so-exclude")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     @property
     def resolved_output_dir(self) -> Path:

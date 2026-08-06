@@ -22,6 +22,14 @@ from app.services.excel_service import (
     process_progress_source_dataframes,
     read_excel_source,
 )
+from app.services.so_exclude_service import (
+    create_so_exclude,
+    delete_so_exclude,
+    ensure_crud_file,
+    list_so_exclude_rows,
+    load_exclude_so_numbers,
+    update_so_exclude,
+)
 
 router = APIRouter(prefix="/api", tags=["bo-report"])
 
@@ -36,12 +44,14 @@ class FolderInfo(BaseModel):
     order_item_dir: str
     source_item_dir: str
     parts_progress_dir: str
+    so_exclude_dir: str
     psc_files: list[str]
     sap_files: list[str]
     partviz_files: list[str]
     order_item_files: list[str]
     source_item_files: list[str]
     parts_progress_files: list[str]
+    so_exclude_files: list[str]
     default_sales_office: str
     default_plant: str
     default_exclude_part_numbers: str
@@ -53,6 +63,8 @@ class ProcessResponse(BaseModel):
     plant: str
     exclude_part_numbers: str
     excluded_row_count: int
+    excluded_so_count: int
+    excluded_so_preview: list[str] = Field(default_factory=list)
     psc_so_count: int
     sap_doc_count: int
     combined_count: int
@@ -63,6 +75,24 @@ class ProcessResponse(BaseModel):
     sap_files: list[str]
     downloads: dict[str, str]
     preview: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class SoExcludeRow(BaseModel):
+    SO_Number: str
+    PO: str = ""
+    REMARK: str = ""
+
+
+class SoExcludeCreate(BaseModel):
+    SO_Number: str
+    PO: str = ""
+    REMARK: str = ""
+
+
+class SoExcludeUpdate(BaseModel):
+    SO_Number: str | None = None
+    PO: str | None = None
+    REMARK: str | None = None
 
 
 class PartvizProcessResponse(BaseModel):
@@ -114,6 +144,8 @@ def get_folders() -> FolderInfo:
     order_item_dir = settings.resolved_order_item_dir
     source_item_dir = settings.resolved_source_item_dir
     parts_progress_dir = settings.resolved_parts_progress_dir
+    so_exclude_dir = settings.resolved_so_exclude_dir
+    ensure_crud_file(so_exclude_dir)
     return FolderInfo(
         psc_dir=str(psc_dir),
         sap_dir=str(sap_dir),
@@ -121,6 +153,7 @@ def get_folders() -> FolderInfo:
         order_item_dir=str(order_item_dir),
         source_item_dir=str(source_item_dir),
         parts_progress_dir=str(parts_progress_dir),
+        so_exclude_dir=str(so_exclude_dir),
         psc_files=[p.name for p in list_excel_files(psc_dir)],
         sap_files=[p.name for p in list_excel_files(sap_dir)],
         partviz_files=[p.name for p in list_excel_files(partviz_dir)],
@@ -129,10 +162,55 @@ def get_folders() -> FolderInfo:
         parts_progress_files=[
             p.name for p in list_excel_files(parts_progress_dir)
         ],
+        so_exclude_files=[p.name for p in list_excel_files(so_exclude_dir)],
         default_sales_office=settings.default_sales_office,
         default_plant=settings.default_plant,
         default_exclude_part_numbers=settings.default_exclude_part_numbers,
     )
+
+
+@router.get("/so-exclude", response_model=list[SoExcludeRow])
+def get_so_exclude() -> list[SoExcludeRow]:
+    rows = list_so_exclude_rows(settings.resolved_so_exclude_dir)
+    return [SoExcludeRow(**row) for row in rows]
+
+
+@router.post("/so-exclude", response_model=SoExcludeRow)
+def post_so_exclude(payload: SoExcludeCreate) -> SoExcludeRow:
+    try:
+        row = create_so_exclude(
+            settings.resolved_so_exclude_dir,
+            so_number=payload.SO_Number,
+            po=payload.PO,
+            remark=payload.REMARK,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SoExcludeRow(**row)
+
+
+@router.put("/so-exclude/{so_number}", response_model=SoExcludeRow)
+def put_so_exclude(so_number: str, payload: SoExcludeUpdate) -> SoExcludeRow:
+    try:
+        row = update_so_exclude(
+            settings.resolved_so_exclude_dir,
+            so_number=so_number,
+            po=payload.PO,
+            remark=payload.REMARK,
+            new_so_number=payload.SO_Number,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SoExcludeRow(**row)
+
+
+@router.delete("/so-exclude/{so_number}")
+def remove_so_exclude(so_number: str) -> dict[str, str]:
+    try:
+        delete_so_exclude(settings.resolved_so_exclude_dir, so_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "deleted", "SO_Number": so_number}
 
 
 def _validate_upload(file: UploadFile) -> None:
@@ -210,12 +288,14 @@ async def process_report(
             psc_frames = [(p.name, read_excel_source(p)) for p in psc_paths]
             sap_frames = [(p.name, read_excel_source(p)) for p in sap_paths]
 
+        exclude_sos = load_exclude_so_numbers(settings.resolved_so_exclude_dir)
         result = process_dataframes(
             psc_frames=psc_frames,
             sap_frames=sap_frames,
             sales_office=sales_office,
             plant=plant,
             exclude_part_numbers=exclude_part_numbers,
+            exclude_so_numbers=exclude_sos,
             output_dir=settings.resolved_output_dir,
         )
     except HTTPException:
@@ -239,6 +319,8 @@ async def process_report(
         plant=result.plant,
         exclude_part_numbers=result.exclude_part_numbers,
         excluded_row_count=result.excluded_row_count,
+        excluded_so_count=result.excluded_so_count,
+        excluded_so_preview=result.excluded_so_preview,
         psc_so_count=result.psc_so_count,
         sap_doc_count=result.sap_doc_count,
         combined_count=result.combined_count,

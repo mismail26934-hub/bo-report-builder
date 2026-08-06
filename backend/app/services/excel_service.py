@@ -138,6 +138,8 @@ class ProcessResult:
     plant: str
     exclude_part_numbers: str
     excluded_row_count: int
+    excluded_so_count: int
+    excluded_so_preview: list[str]
     psc_so_count: int
     sap_doc_count: int
     combined_count: int
@@ -175,6 +177,18 @@ def exclude_sap_material_rows(
     return df.loc[~mask_exclude].reset_index(drop=True), excluded_count
 
 
+def exclude_so_values(
+    series: pd.Series, exclude_sos: set[str]
+) -> tuple[pd.Series, list[str]]:
+    """Drop SO / Sales document values present in exclude_sos."""
+    if not exclude_sos:
+        return series, []
+    values = series.astype(str).str.strip()
+    removed = sorted({v for v in values.tolist() if v in exclude_sos})
+    kept = values[~values.isin(exclude_sos)]
+    return unique_series(kept), removed
+
+
 def extract_sap_sales_documents(df: pd.DataFrame, plants: list[str]) -> pd.Series:
     if not plants:
         raise ValueError("Plant wajib diisi.")
@@ -195,6 +209,7 @@ def process_dataframes(
     plant: str,
     output_dir: Path,
     exclude_part_numbers: str = "",
+    exclude_so_numbers: set[str] | None = None,
 ) -> ProcessResult:
     if not psc_frames:
         raise ValueError("Tidak ada data PSC untuk diproses.")
@@ -208,6 +223,7 @@ def process_dataframes(
 
     exclude_parts = parse_exclude_values(exclude_part_numbers)
     exclude_label = ", ".join(exclude_parts)
+    exclude_sos = exclude_so_numbers or set()
 
     psc_df = pd.concat([frame for _, frame in psc_frames], ignore_index=True)
     sap_df = pd.concat([frame for _, frame in sap_frames], ignore_index=True)
@@ -215,6 +231,11 @@ def process_dataframes(
 
     so_numbers = extract_psc_so_numbers(psc_df, sales_office)
     sales_docs = extract_sap_sales_documents(sap_df, plants)
+
+    so_numbers, removed_psc = exclude_so_values(so_numbers, exclude_sos)
+    sales_docs, removed_sap = exclude_so_values(sales_docs, exclude_sos)
+    excluded_so_preview = sorted(set(removed_psc) | set(removed_sap))
+    excluded_so_count = len(excluded_so_preview)
 
     psc_set = set(so_numbers.tolist())
     sap_set = set(sales_docs.tolist())
@@ -243,6 +264,8 @@ def process_dataframes(
         plant=plant_label,
         exclude_part_numbers=exclude_label,
         excluded_row_count=excluded_row_count,
+        excluded_so_count=excluded_so_count,
+        excluded_so_preview=excluded_so_preview[:20],
         psc_so_count=len(so_numbers),
         sap_doc_count=len(sales_docs),
         combined_count=len(combined),
@@ -263,6 +286,7 @@ def process_dataframes(
             "matched": matched[:20],
             "only_psc": only_psc[:20],
             "only_sap": only_sap[:20],
+            "excluded_so": excluded_so_preview[:20],
         },
     )
 
