@@ -11,7 +11,7 @@ Pilih salah satu mode:
 | Mode          | Keterangan                                                             |
 | ------------- | ---------------------------------------------------------------------- |
 | Folder server | Membaca semua `.xlsx` / `.xls` di `data-psc` & `data-sap-zmmm_open_bo` |
-| Upload        | User mengunggah file PSC & SAP dari browser                            |
+| Upload        | Upload file → file lama dipindah ke `backup/<timestamp>/`, file baru disimpan ke folder data, lalu diproses |
 
 ### 2. Filter PSC — Sales Office
 
@@ -71,7 +71,7 @@ Pilih salah satu mode:
 | Mode          | Keterangan                                         |
 | ------------- | -------------------------------------------------- |
 | Folder server | Membaca semua `.xlsx` / `.xls` di `data-partviz`   |
-| Upload        | User mengunggah multiple file PartViz dari browser |
+| Upload        | Upload → backup file lama, simpan file baru ke `data-partviz`, lalu proses |
 
 ### 2. Gabungkan & urutkan
 
@@ -103,7 +103,7 @@ Setiap proses **menimpa** file tetap di `output/`:
 | Mode          | Keterangan                                                                  |
 | ------------- | --------------------------------------------------------------------------- |
 | Folder server | Membaca semua `.xlsx` / `.xls` di `data-sap-zvsd_parts_progress-order_item` |
-| Upload        | User mengunggah multiple file Order Item dari browser                       |
+| Upload        | Upload → backup file lama, simpan file baru ke folder data, lalu proses     |
 
 ### 2. Gabungkan & hitung
 
@@ -131,7 +131,7 @@ Setiap proses menimpa file tetap berikut:
 | Mode          | Keterangan                                                                                              |
 | ------------- | ------------------------------------------------------------------------------------------------------- |
 | Folder server | Membaca multiple Excel di `data-sap-zvsd_parts_progress-source_item` dan `data-sap-zvsd_parts_progress` |
-| Upload        | User mengunggah multiple file Source Item dan Parts Progress dari browser                               |
+| Upload        | Upload → backup file lama di masing-masing folder, simpan file baru, lalu proses                        |
 
 ### 2. Filter & remove duplicate
 
@@ -213,6 +213,14 @@ docker compose up --build -d
 - API: http://server-ip:8000
 
 Pastikan semua folder data yang tercantum pada struktur di atas berisi file Excel di server.
+
+### Perilaku mode Upload
+
+Untuk semua fitur proses (PSC×SAP, PartViz, Order Item, Source Item):
+
+1. File Excel lama di folder data terkait dipindah ke `backup/<YYYYMMDD_HHMMSS>/` di dalam folder yang sama
+2. File yang diunggah disimpan ke folder data tersebut
+3. Proses filter/gabung berjalan memakai data baru
 
 ## Field UI
 

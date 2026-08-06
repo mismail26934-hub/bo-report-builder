@@ -30,6 +30,8 @@ from app.services.so_exclude_service import (
     load_exclude_so_numbers,
     update_so_exclude,
 )
+from app.services.file_storage_service import replace_folder_uploads
+
 
 router = APIRouter(prefix="/api", tags=["bo-report"])
 
@@ -223,9 +225,17 @@ def _validate_upload(file: UploadFile) -> None:
 async def _read_uploads(
     files: list[UploadFile],
     usecols=None,
+    persist_dir: Path | None = None,
 ) -> list[tuple[str, object]]:
-    frames: list[tuple[str, object]] = []
+    """
+    Read uploaded Excel into dataframes.
+    If persist_dir is set: after all files parse OK, move existing Excel in that
+    folder to backup/<timestamp>/ then save the new uploads there.
+    """
     max_bytes = settings.max_upload_mb * 1024 * 1024
+    payloads: list[tuple[str, bytes]] = []
+    frames: list[tuple[str, object]] = []
+
     for upload in files:
         _validate_upload(upload)
         content = await upload.read()
@@ -234,18 +244,35 @@ async def _read_uploads(
                 status_code=400,
                 detail=f"File terlalu besar (max {settings.max_upload_mb} MB): {upload.filename}",
             )
+        filename = upload.filename or "upload.xlsx"
         try:
             df = read_excel_source(
                 content,
-                filename=upload.filename,
+                filename=filename,
                 usecols=usecols,
             )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=400,
-                detail=f"Gagal membaca Excel {upload.filename}: {exc}",
+                detail=f"Gagal membaca Excel {filename}: {exc}",
             ) from exc
-        frames.append((upload.filename or "upload.xlsx", df))
+        payloads.append((filename, content))
+        frames.append((filename, df))
+
+    if persist_dir is not None:
+        try:
+            saved, _backup = replace_folder_uploads(persist_dir, payloads)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=500,
+                detail=f"Gagal menyimpan upload ke folder: {exc}",
+            ) from exc
+        # Prefer saved filenames (may be uniquified)
+        frames = [
+            (path.name, frame)
+            for path, (_, frame) in zip(saved, frames, strict=True)
+        ]
+
     return frames
 
 
@@ -273,8 +300,14 @@ async def process_report(
                     status_code=400,
                     detail="Upload mode membutuhkan file PSC dan SAP.",
                 )
-            psc_frames = await _read_uploads(psc_files)
-            sap_frames = await _read_uploads(sap_files)
+            psc_frames = await _read_uploads(
+                psc_files,
+                persist_dir=settings.resolved_psc_dir,
+            )
+            sap_frames = await _read_uploads(
+                sap_files,
+                persist_dir=settings.resolved_sap_dir,
+            )
         else:
             psc_paths = list_excel_files(settings.resolved_psc_dir)
             sap_paths = list_excel_files(settings.resolved_sap_dir)
@@ -346,7 +379,10 @@ async def process_partviz(
                     status_code=400,
                     detail="Upload mode membutuhkan minimal satu file PartViz.",
                 )
-            frames = await _read_uploads(partviz_files)
+            frames = await _read_uploads(
+                partviz_files,
+                persist_dir=settings.resolved_partviz_dir,
+            )
         else:
             paths = list_excel_files(settings.resolved_partviz_dir)
             if not paths:
@@ -400,7 +436,10 @@ async def process_order_item_price(
                     status_code=400,
                     detail="Upload mode membutuhkan minimal satu file Order Item.",
                 )
-            frames = await _read_uploads(order_item_files)
+            frames = await _read_uploads(
+                order_item_files,
+                persist_dir=settings.resolved_order_item_dir,
+            )
         else:
             paths = list_excel_files(settings.resolved_order_item_dir)
             if not paths:
@@ -471,10 +510,12 @@ async def process_progress_source(
                     "Material",
                     "Reason for rejection",
                 ],
+                persist_dir=settings.resolved_source_item_dir,
             )
             parts_progress_frames = await _read_uploads(
                 parts_progress_files,
                 usecols=[0],
+                persist_dir=settings.resolved_parts_progress_dir,
             )
         else:
             source_item_paths = list_excel_files(
