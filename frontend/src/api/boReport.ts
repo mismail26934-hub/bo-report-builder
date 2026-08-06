@@ -6,6 +6,12 @@ export type FolderInfo = {
   source_item_dir: string;
   parts_progress_dir: string;
   so_exclude_dir: string;
+  estimasi_dir: string;
+  bo_last_dir: string;
+  zmim_cpavail_dir: string;
+  zmmm_stock_info_dir: string;
+  zmmm_stock_info_hub_dir: string;
+  zmpu_po_moni_dir: string;
   psc_files: string[];
   sap_files: string[];
   partviz_files: string[];
@@ -13,9 +19,33 @@ export type FolderInfo = {
   source_item_files: string[];
   parts_progress_files: string[];
   so_exclude_files: string[];
+  estimasi_files: string[];
+  bo_last_files: string[];
+  zmim_cpavail_files: string[];
+  zmmm_stock_info_files: string[];
+  zmmm_stock_info_hub_files: string[];
+  zmpu_po_moni_files: string[];
+  data_upload_datasets: DataUploadDataset[];
   default_sales_office: string;
   default_plant: string;
   default_exclude_part_numbers: string;
+};
+
+export type DataUploadDataset = {
+  key: string;
+  label: string;
+  folder: string;
+  path: string;
+};
+
+export type DataUploadResponse = {
+  dataset: string;
+  label: string;
+  folder: string;
+  saved_files: string[];
+  backup_dir: string | null;
+  file_count: number;
+  files: string[];
 };
 
 export type ProcessResponse = {
@@ -103,6 +133,24 @@ async function parseError(res: Response): Promise<string> {
 
 export async function fetchFolders(): Promise<FolderInfo> {
   const res = await fetch(`${API_BASE}/api/folders`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function uploadDataFiles(
+  datasetKey: string,
+  files: FileList | File[],
+): Promise<DataUploadResponse> {
+  const list = Array.from(files);
+  if (!list.length) {
+    throw new Error("Minimal satu file Excel wajib diunggah.");
+  }
+  const form = new FormData();
+  list.forEach((file) => form.append("files", file));
+  const res = await fetch(
+    `${API_BASE}/api/data-upload/${encodeURIComponent(datasetKey)}`,
+    { method: "POST", body: form },
+  );
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }

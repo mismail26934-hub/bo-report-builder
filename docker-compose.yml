@@ -9,6 +9,12 @@ services:
       - ./data-sap-zvsd_parts_progress-source_item:/app/data-sap-zvsd_parts_progress-source_item
       - ./data-sap-zvsd_parts_progress:/app/data-sap-zvsd_parts_progress
       - ./data-so-exclude:/app/data-so-exclude
+      - ./data-estimasi:/app/data-estimasi
+      - ./data-bo-last:/app/data-bo-last
+      - ./data-sap-zmim_cpavail:/app/data-sap-zmim_cpavail
+      - ./data-sap-zmmm_stock_info:/app/data-sap-zmmm_stock_info
+      - ./data-sap-zmmm_stock_info-hub:/app/data-sap-zmmm_stock_info-hub
+      - ./data-sap-zmpu_po_moni:/app/data-sap-zmpu_po_moni
       - ./output:/app/output
     environment:
       CORS_ORIGINS: "*"

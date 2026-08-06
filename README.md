@@ -170,6 +170,12 @@ bo-report/
 ├── data-sap-zvsd_parts_progress-source_item/
 ├── data-sap-zvsd_parts_progress/
 ├── data-so-exclude/
+├── data-estimasi/
+├── data-bo-last/
+├── data-sap-zmim_cpavail/
+├── data-sap-zmmm_stock_info/
+├── data-sap-zmmm_stock_info-hub/
+├── data-sap-zmpu_po_moni/
 ├── output/
 └── docker-compose.yml
 ```
@@ -216,11 +222,28 @@ Pastikan semua folder data yang tercantum pada struktur di atas berisi file Exce
 
 ### Perilaku mode Upload
 
-Untuk semua fitur proses (PSC×SAP, PartViz, Order Item, Source Item):
+Untuk semua fitur proses (PSC×SAP, PartViz, Order Item, Source Item) dan **Upload Data Excel**:
 
 1. File Excel lama di folder data terkait dipindah ke `backup/<YYYYMMDD_HHMMSS>/` di dalam folder yang sama
 2. File yang diunggah disimpan ke folder data tersebut
-3. Proses filter/gabung berjalan memakai data baru
+3. Proses filter/gabung (jika ada) berjalan memakai data baru
+
+---
+
+## Alur — Upload Data Excel
+
+Upload saja (belum ada transform) ke folder:
+
+| Dataset | Folder |
+| ------- | ------ |
+| Estimasi | `data-estimasi` |
+| BO Last | `data-bo-last` |
+| SAP ZMIM CPAvail | `data-sap-zmim_cpavail` |
+| SAP ZMMM Stock Info | `data-sap-zmmm_stock_info` |
+| SAP ZMMM Stock Info Hub | `data-sap-zmmm_stock_info-hub` |
+| SAP ZMPU PO Moni | `data-sap-zmpu_po_moni` |
+
+API: `POST /api/data-upload/{dataset_key}` dengan form field `files`.
 
 ## Field UI
 

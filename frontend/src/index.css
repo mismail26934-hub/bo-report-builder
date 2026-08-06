@@ -406,6 +406,22 @@ button:disabled {
   margin: 0;
 }
 
+.data-upload-grid {
+  display: grid;
+  gap: 1.25rem;
+}
+
+@media (min-width: 920px) {
+  .data-upload-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.data-upload-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
 .row-actions {
   white-space: nowrap;
 }

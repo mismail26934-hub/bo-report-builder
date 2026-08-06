@@ -9,6 +9,7 @@ import {
   processProgressSource,
   processReport,
   updateSoExclude,
+  uploadDataFiles,
   type OrderItemPriceProcessPayload,
   type PartvizProcessPayload,
   type ProgressSourceProcessPayload,
@@ -20,6 +21,22 @@ export function useFolders() {
   return useQuery({
     queryKey: ["folders"],
     queryFn: fetchFolders,
+  });
+}
+
+export function useUploadDataFiles() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      datasetKey,
+      files,
+    }: {
+      datasetKey: string;
+      files: FileList | File[];
+    }) => uploadDataFiles(datasetKey, files),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["folders"] });
+    },
   });
 }
 

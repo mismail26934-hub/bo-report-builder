@@ -31,6 +31,12 @@ from app.services.so_exclude_service import (
     update_so_exclude,
 )
 from app.services.file_storage_service import replace_folder_uploads
+from app.services.data_upload_service import (
+    DATA_UPLOAD_DATASETS,
+    DATA_UPLOAD_LABELS,
+    list_data_upload_datasets,
+    resolve_data_upload_dir,
+)
 
 
 router = APIRouter(prefix="/api", tags=["bo-report"])
@@ -47,6 +53,12 @@ class FolderInfo(BaseModel):
     source_item_dir: str
     parts_progress_dir: str
     so_exclude_dir: str
+    estimasi_dir: str
+    bo_last_dir: str
+    zmim_cpavail_dir: str
+    zmmm_stock_info_dir: str
+    zmmm_stock_info_hub_dir: str
+    zmpu_po_moni_dir: str
     psc_files: list[str]
     sap_files: list[str]
     partviz_files: list[str]
@@ -54,9 +66,26 @@ class FolderInfo(BaseModel):
     source_item_files: list[str]
     parts_progress_files: list[str]
     so_exclude_files: list[str]
+    estimasi_files: list[str]
+    bo_last_files: list[str]
+    zmim_cpavail_files: list[str]
+    zmmm_stock_info_files: list[str]
+    zmmm_stock_info_hub_files: list[str]
+    zmpu_po_moni_files: list[str]
+    data_upload_datasets: list[dict[str, str]] = Field(default_factory=list)
     default_sales_office: str
     default_plant: str
     default_exclude_part_numbers: str
+
+
+class DataUploadResponse(BaseModel):
+    dataset: str
+    label: str
+    folder: str
+    saved_files: list[str]
+    backup_dir: str | None = None
+    file_count: int
+    files: list[str]
 
 
 class ProcessResponse(BaseModel):
@@ -148,6 +177,14 @@ def get_folders() -> FolderInfo:
     parts_progress_dir = settings.resolved_parts_progress_dir
     so_exclude_dir = settings.resolved_so_exclude_dir
     ensure_crud_file(so_exclude_dir)
+
+    estimasi_dir = resolve_data_upload_dir("estimasi")
+    bo_last_dir = resolve_data_upload_dir("bo-last")
+    zmim_cpavail_dir = resolve_data_upload_dir("sap-zmim-cpavail")
+    zmmm_stock_info_dir = resolve_data_upload_dir("sap-zmmm-stock-info")
+    zmmm_stock_info_hub_dir = resolve_data_upload_dir("sap-zmmm-stock-info-hub")
+    zmpu_po_moni_dir = resolve_data_upload_dir("sap-zmpu-po-moni")
+
     return FolderInfo(
         psc_dir=str(psc_dir),
         sap_dir=str(sap_dir),
@@ -156,6 +193,12 @@ def get_folders() -> FolderInfo:
         source_item_dir=str(source_item_dir),
         parts_progress_dir=str(parts_progress_dir),
         so_exclude_dir=str(so_exclude_dir),
+        estimasi_dir=str(estimasi_dir),
+        bo_last_dir=str(bo_last_dir),
+        zmim_cpavail_dir=str(zmim_cpavail_dir),
+        zmmm_stock_info_dir=str(zmmm_stock_info_dir),
+        zmmm_stock_info_hub_dir=str(zmmm_stock_info_hub_dir),
+        zmpu_po_moni_dir=str(zmpu_po_moni_dir),
         psc_files=[p.name for p in list_excel_files(psc_dir)],
         sap_files=[p.name for p in list_excel_files(sap_dir)],
         partviz_files=[p.name for p in list_excel_files(partviz_dir)],
@@ -165,9 +208,81 @@ def get_folders() -> FolderInfo:
             p.name for p in list_excel_files(parts_progress_dir)
         ],
         so_exclude_files=[p.name for p in list_excel_files(so_exclude_dir)],
+        estimasi_files=[p.name for p in list_excel_files(estimasi_dir)],
+        bo_last_files=[p.name for p in list_excel_files(bo_last_dir)],
+        zmim_cpavail_files=[p.name for p in list_excel_files(zmim_cpavail_dir)],
+        zmmm_stock_info_files=[
+            p.name for p in list_excel_files(zmmm_stock_info_dir)
+        ],
+        zmmm_stock_info_hub_files=[
+            p.name for p in list_excel_files(zmmm_stock_info_hub_dir)
+        ],
+        zmpu_po_moni_files=[p.name for p in list_excel_files(zmpu_po_moni_dir)],
+        data_upload_datasets=list_data_upload_datasets(),
         default_sales_office=settings.default_sales_office,
         default_plant=settings.default_plant,
         default_exclude_part_numbers=settings.default_exclude_part_numbers,
+    )
+
+
+@router.post("/data-upload/{dataset_key}", response_model=DataUploadResponse)
+async def upload_data_files(
+    dataset_key: str,
+    files: list[UploadFile] | None = File(default=None),
+) -> DataUploadResponse:
+    if dataset_key not in DATA_UPLOAD_DATASETS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dataset tidak dikenal: {dataset_key}",
+        )
+    if not files:
+        raise HTTPException(
+            status_code=400,
+            detail="Minimal satu file Excel (.xlsx / .xls) wajib diunggah.",
+        )
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    payloads: list[tuple[str, bytes]] = []
+    for upload in files:
+        _validate_upload(upload)
+        content = await upload.read()
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"File terlalu besar (max {settings.max_upload_mb} MB): "
+                    f"{upload.filename}"
+                ),
+            )
+        filename = upload.filename or "upload.xlsx"
+        # Validate readable Excel before replacing folder contents
+        try:
+            read_excel_source(content, filename=filename)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail=f"Gagal membaca Excel {filename}: {exc}",
+            ) from exc
+        payloads.append((filename, content))
+
+    folder = resolve_data_upload_dir(dataset_key)
+    try:
+        saved, backup_dir = replace_folder_uploads(folder, payloads)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal menyimpan upload: {exc}",
+        ) from exc
+
+    current_files = [p.name for p in list_excel_files(folder)]
+    return DataUploadResponse(
+        dataset=dataset_key,
+        label=DATA_UPLOAD_LABELS[dataset_key],
+        folder=str(folder),
+        saved_files=[p.name for p in saved],
+        backup_dir=str(backup_dir) if backup_dir else None,
+        file_count=len(saved),
+        files=current_files,
     )
 
 
