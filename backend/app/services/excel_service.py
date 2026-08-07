@@ -72,18 +72,55 @@ def list_excel_files(folder: Path) -> list[Path]:
     return sorted(files)
 
 
+def _excel_bytes_hint(content: bytes, label: str) -> str | None:
+    """Return a user-facing hint when bytes look like a broken .xlsx."""
+    if not content:
+        return f"{label}: file kosong (0 byte)."
+    # Valid OOXML / ZIP local header
+    if content[:2] == b"PK":
+        has_eocd = content.rfind(b"PK\x05\x06") >= 0
+        if not has_eocd:
+            return (
+                f"{label}: file Excel terpotong/tidak lengkap "
+                "(missing ZIP end record). Buka di Excel lalu Save As "
+                "ulang sebagai .xlsx, lalu upload file hasil Save As."
+            )
+    return None
+
+
 def read_excel_source(
     source: Path | BinaryIO | bytes,
     filename: str | None = None,
     usecols=None,
 ) -> pd.DataFrame:
-    if isinstance(source, Path):
-        df = pd.read_excel(source, dtype=str, usecols=usecols)
-    elif isinstance(source, (bytes, bytearray)):
-        df = pd.read_excel(io.BytesIO(source), dtype=str, usecols=usecols)
-    else:
-        content = source.read()
-        df = pd.read_excel(io.BytesIO(content), dtype=str, usecols=usecols)
+    label = filename or (source.name if isinstance(source, Path) else "upload.xlsx")
+    content: bytes | None = None
+    try:
+        if isinstance(source, Path):
+            content = source.read_bytes()
+            hint = _excel_bytes_hint(content, label)
+            if hint:
+                raise ValueError(hint)
+            df = pd.read_excel(io.BytesIO(content), dtype=str, usecols=usecols)
+        elif isinstance(source, (bytes, bytearray)):
+            content = bytes(source)
+            hint = _excel_bytes_hint(content, label)
+            if hint:
+                raise ValueError(hint)
+            df = pd.read_excel(io.BytesIO(content), dtype=str, usecols=usecols)
+        else:
+            content = source.read()
+            hint = _excel_bytes_hint(content, label)
+            if hint:
+                raise ValueError(hint)
+            df = pd.read_excel(io.BytesIO(content), dtype=str, usecols=usecols)
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        hint = _excel_bytes_hint(content or b"", label) if content is not None else None
+        if hint:
+            raise ValueError(hint) from exc
+        raise
 
     df = _normalize_columns(df)
     # Drop fully empty rows (common blank line under header)
