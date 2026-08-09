@@ -16,9 +16,76 @@ GUIDE_DIR_CANDIDATES = ("guide-bo-report", "guid-bo-report")
 GUIDE_FILENAME = "Guide BO Report.xlsx"
 GUIDE_SHEET = "Guide"
 TEMPLATE_SHEET = "Data Template"
+ESTIMASI_SHEET = "Estimasi & Remark"
+TEMPLATE_NO_PO_SHEET = "Template NO PO"
+GUIDE_KEEP_SHEETS = {
+    TEMPLATE_SHEET,
+    GUIDE_SHEET,
+    ESTIMASI_SHEET,
+    TEMPLATE_NO_PO_SHEET,
+}
+
+# Template NO PO header → possible Data Template column names (first match wins)
+NO_PO_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "Plant": ("Plant",),
+    "Customer Name": ("Customer Name",),
+    "Customer PO": ("Customer PO",),
+    "IREQ Item": ("IREQ Item",),
+    "SO Date": ("SO Date",),
+    "Sales document": ("Sales document",),
+    "Sales Document Item": ("Sales Document Item",),
+    "Class": ("Class",),
+    "Created By": ("Created by", "Created By"),
+    "Material No": ("Material No",),
+    "Material Description": ("Material Description",),
+    "Order Quantity": ("Order Quantity",),
+    "SNSKI": ("SNSKI",),
+    "Gross Weight": ("Gross Weight", "Weight"),
+    "On-hand Stock": ("On-hand Stock", "SOH"),
+    "On-Order Qty": ("On-Order Qty", "On-Order"),
+    "Pre-Stock Qty": ("Pre-Stock Qty", "Pre-Stock"),
+    "On Hand Reserve Stock": ("On Hand Reserve Stock", "Reserve"),
+    "1G38": ("1G38",),
+    "1S67": ("1S67",),
+    "1S66": ("1S66",),
+    "1S76": ("1S76",),
+    "1S81": ("1S81",),
+    "Remark": ("Remark", "Remaks"),
+    "Order Method": ("Order Method",),
+    "Purchasing Document": ("Purchasing Document",),
+    "Purchase Requisition": ("Purchase Requisition",),
+    "PR Item": ("PR Item",),
+    "Need By Date": ("Need By Date",),
+    "Deletion indicator": ("Deletion indicator",),
+}
 OUTPUT_BO_REPORT = "bo_report.xlsx"
 JOB_ID_BO_GUIDE = "bo-guide"
 EXCLUDE_MATERIAL_NOS = {"DELIVERY_CHARGE:ZZ"}
+
+# Stock Info plant 1G38 → Data Template.
+# Guide uses SAP titles (Gross Weight, On-hand Stock, ...); Data Template may use
+# short aliases (Weight, SOH, ...). Fill whichever header exists in the template.
+STOCK_1G38_FIELD_SPECS: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
+    (("SNSKI",), ("SNSKI",)),
+    (("Weight", "Gross Weight"), ("Gross Weight", "Weight")),
+    (("SOH", "On-hand Stock"), ("On-hand Stock", "SOH")),
+    (("On-Order", "On-Order Qty"), ("On-Order Qty", "On-Order")),
+    (("Pre-Stock", "Pre-Stock Qty"), ("Pre-Stock Qty", "Pre-Stock")),
+    (("Reserve", "On Hand Reserve Stock"), ("On Hand Reserve Stock", "Reserve")),
+    (("Hazardous Indicator",), ("Hazardous Indicator",)),
+    (("Replacement Indicator",), ("Replacement Indicator",)),
+    (("Deletion Indicator",), ("Deletion Indicator",)),
+    (("Returnable Indicator",), ("Returnable Indicator",)),
+    (("Package Qty",), ("Package Qty",)),
+    (("Commodity Code",), ("Commodity Code",)),
+]
+
+# Guide: 1G38 and hub plants take On-hand Stock (ATP)
+STOCK_QTY_CANDIDATES = (
+    "On-hand Stock (ATP)",
+    "On-hand Stock",
+    "Total Availability (TA)",
+)
 
 DATE_OUTPUT_COLUMNS = {
     "SO Date",
@@ -72,6 +139,17 @@ NUMERIC_OUTPUT_COLUMNS = {
     "1S81",
     "OD Quantity",
     "1G38",
+    "Weight",
+    "Gross Weight",
+    "SOH",
+    "On-hand Stock",
+    "On-Order",
+    "On-Order Qty",
+    "Pre-Stock",
+    "Pre-Stock Qty",
+    "Reserve",
+    "On Hand Reserve Stock",
+    "Package Qty",
 }
 
 
@@ -100,6 +178,30 @@ def _safe_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
         return find_column(df, candidates)
     except KeyError:
         return None
+
+
+def _template_targets(
+    template_headers: list[str],
+    aliases: tuple[str, ...],
+) -> list[str]:
+    """Return alias names that exist on the Data Template (or first alias as fallback)."""
+    header_set = set(template_headers)
+    found = [name for name in aliases if name in header_set]
+    return found if found else [aliases[0]]
+
+
+def _map_by_material_base(
+    base_mat_base: pd.Series,
+    keys: pd.Series,
+    values: pd.Series,
+) -> pd.Series:
+    mapping: dict[str, str] = {}
+    for k, v in zip(keys.tolist(), values.tolist(), strict=False):
+        if k and k not in mapping:
+            mapping[k] = v
+    return base_mat_base.map(
+        lambda k, m=mapping: m.get(str(k).strip(), "") if pd.notna(k) else ""
+    )
 
 
 def _load_folder_frames(folder: Path) -> pd.DataFrame:
@@ -556,6 +658,229 @@ def apply_action_rules(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _format_estimasi_date(base_dates: pd.Series, days: pd.Series) -> pd.Series:
+    """Add day offsets to dates; return dd-mmm-yyyy text (blank if base missing)."""
+    parsed = _as_date_only(base_dates)
+    offset = _to_numeric(days).fillna(0)
+    out: list[str] = []
+    for dt, day in zip(parsed.tolist(), offset.tolist(), strict=False):
+        if pd.isna(dt):
+            out.append("")
+            continue
+        try:
+            day_n = int(float(day)) if pd.notna(day) else 0
+        except (TypeError, ValueError):
+            day_n = 0
+        out.append((dt + pd.Timedelta(days=day_n)).strftime("%d-%b-%Y"))
+    return pd.Series(out, index=base_dates.index, dtype=object)
+
+
+def apply_estimasi_remark_rules(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fill Estimasi + Remark from sheet 'Estimasi & Remark' (Else-If first-match).
+    More specific rules first, then general Purchasing Document blank.
+    Template column is 'Remark' (legacy 'Remaks' still accepted).
+    """
+    from datetime import date
+
+    out = df.copy()
+    n = len(out)
+    empty = pd.Series([""] * n, index=out.index, dtype=object)
+    estimasi = empty.copy()
+    remark = empty.copy()
+    filled = pd.Series([False] * n, index=out.index)
+
+    def set_where(mask: pd.Series, est: pd.Series | str, rem: str) -> None:
+        nonlocal estimasi, remark, filled
+        apply = mask.fillna(False) & ~filled
+        if not apply.any():
+            return
+        if isinstance(est, str):
+            estimasi = estimasi.where(~apply, est)
+        else:
+            estimasi = estimasi.where(~apply, est)
+        remark = remark.where(~apply, rem)
+        filled = filled | apply
+
+    po_raw = (
+        out["Purchasing Document"] if "Purchasing Document" in out.columns else empty
+    )
+    po_blank = _series_blank(po_raw)
+    po_filled = ~po_blank
+
+    klass = (
+        _norm(out["Class"]).fillna("").astype(str).str.upper()
+        if "Class" in out.columns
+        else empty.astype(str)
+    )
+    shipment_raw = (
+        out["Shipment Number"] if "Shipment Number" in out.columns else empty
+    )
+    shipment_blank = _series_blank(shipment_raw)
+    shipment_filled = ~shipment_blank
+
+    vendor_raw = (
+        out["Vendor/supplying plant"]
+        if "Vendor/supplying plant" in out.columns
+        else empty
+    )
+    vendor = _norm(vendor_raw).fillna("").astype(str).str.upper()
+    vendor_cadc = vendor.str.startswith("1000085") | vendor.str.contains(
+        "CATERPILLAR ASIA DELIVERY CENTER",
+        regex=False,
+        na=False,
+    )
+
+    agreement = (
+        _norm(out["Agreement Type"]).fillna("").astype(str).str.upper()
+        if "Agreement Type" in out.columns
+        else empty.astype(str)
+    )
+    agreement_cpro = agreement.eq("CPRO")
+    agreement_mega_down = agreement.str.contains("MEGA", na=False) | agreement.str.contains(
+        "DOWN",
+        na=False,
+    )
+    agreement_blank = _series_blank(
+        out["Agreement Type"] if "Agreement Type" in out.columns else empty
+    )
+
+    milestone_raw = out["Milestone"] if "Milestone" in out.columns else empty
+    milestone_upper = _norm(milestone_raw).fillna("").astype(str).str.upper()
+
+    eta = out["ETA D"] if "ETA D" in out.columns else empty
+    today = pd.Series(
+        [pd.Timestamp(date.today())] * n,
+        index=out.index,
+    )
+    today_plus_eta = _format_estimasi_date(today, eta)
+    today_plus_120 = _format_estimasi_date(
+        today,
+        pd.Series([120] * n, index=out.index),
+    )
+
+    ship_num_date = (
+        out["Shipment Number Date"]
+        if "Shipment Number Date" in out.columns
+        else empty
+    )
+    shp_by = out["Shp By Dt"] if "Shp By Dt" in out.columns else empty
+    act_dept = (
+        out["Act Dept Dt -Inv CAT"]
+        if "Act Dept Dt -Inv CAT" in out.columns
+        else empty
+    )
+    est_ship = out["Est Ship Date"] if "Est Ship Date" in out.columns else empty
+    source_date = out["Source Date"] if "Source Date" in out.columns else empty
+
+    # SOURCE DATE + 3 + ETA
+    source_plus_3_eta = _format_estimasi_date(
+        source_date,
+        _to_numeric(eta).fillna(0) + 3,
+    )
+
+    # 1) CLASS = ASSY + PO blank
+    set_where(
+        klass.eq("ASSY") & po_blank,
+        "TBA",
+        "PO Subcont BUILD UP",
+    )
+    # 2) CLASS = TRANSFER + PO filled + Shipment blank → TODAY()+ETA
+    set_where(
+        klass.eq("TRANSFER") & po_filled & shipment_blank,
+        today_plus_eta,
+        "Follow Up Cabang",
+    )
+    # 3) CLASS = TRANSFER + Shipment filled → Shipment Number Date + ETA
+    set_where(
+        klass.eq("TRANSFER") & shipment_filled,
+        _format_estimasi_date(ship_num_date, eta),
+        "Follow Up CKB",
+    )
+
+    po_cadc = klass.eq("PO") & vendor_cadc
+
+    # CPRO milestones
+    set_where(
+        po_cadc & agreement_cpro & milestone_upper.eq("SOURCED"),
+        _format_estimasi_date(shp_by, eta),
+        "Waiting Inv",
+    )
+    set_where(
+        po_cadc & agreement_cpro & milestone_upper.eq("SHIPPED"),
+        _format_estimasi_date(act_dept, eta),
+        "Follow Up CKB",
+    )
+    set_where(
+        po_cadc & agreement_cpro & milestone_upper.eq("FUTURE DATED"),
+        _format_estimasi_date(shp_by, eta),
+        "F/U ESD",
+    )
+    set_where(
+        po_cadc & agreement_cpro & milestone_upper.eq("ESD NEEDED"),
+        today_plus_120,
+        "F/U ESD",
+    )
+    set_where(
+        po_cadc & agreement_cpro & milestone_upper.eq("ESD AVAILABLE"),
+        _format_estimasi_date(est_ship, eta),
+        "F/U ESD",
+    )
+
+    # MEGA / DOWN
+    set_where(
+        po_cadc & agreement_mega_down & milestone_upper.eq("ESD NEEDED"),
+        "TBA",
+        "Waiting for branch release or Caterpillar submit",
+    )
+    set_where(
+        po_cadc & agreement_mega_down & milestone_upper.eq("ESD AVAILABLE"),
+        _format_estimasi_date(est_ship, eta),
+        "F/U ESD",
+    )
+
+    # Agreement blank
+    set_where(
+        po_cadc & agreement_blank & _series_blank(milestone_raw),
+        "TBA",
+        "Waiting for branch release or Caterpillar submit",
+    )
+    set_where(
+        po_cadc & agreement_blank & milestone_upper.eq("SOURCED"),
+        source_plus_3_eta,
+        "Waiting invoice",
+    )
+    set_where(
+        po_cadc & agreement_blank & milestone_upper.eq("SHIPPED"),
+        _format_estimasi_date(act_dept, eta),
+        "Waiting handover to CKB",
+    )
+    set_where(
+        po_cadc & agreement_blank & milestone_upper.eq("ESD NEEDED"),
+        today_plus_120,
+        "F/U ESD",
+    )
+    set_where(
+        po_cadc & agreement_blank & milestone_upper.eq("ESD AVAILABLE"),
+        _format_estimasi_date(est_ship, eta),
+        "F/U ESD",
+    )
+
+    # General: Purchasing Document blank
+    set_where(
+        po_blank,
+        "TBA",
+        "Waiting for branch release or Caterpillar submit",
+    )
+
+    out["Estimasi"] = estimasi
+    # Data Template header is now "Remark" (was "Remaks")
+    out["Remark"] = remark
+    if "Remaks" in out.columns:
+        out["Remaks"] = remark
+    return out
+
+
 def _rename_from_source(source: pd.DataFrame) -> pd.DataFrame:
     """Map Source Item columns onto Data Template field names."""
     mapping = [
@@ -638,17 +963,100 @@ def _excel_safe_text(value: object) -> str:
     )
 
 
+def _excel_cell_value(cell_value: object) -> object | None:
+    if cell_value is None or (isinstance(cell_value, float) and pd.isna(cell_value)):
+        return None
+    if hasattr(cell_value, "item") and not isinstance(cell_value, str):
+        try:
+            cell_value = cell_value.item()
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(cell_value, float) and pd.isna(cell_value):
+        return None
+    return cell_value
+
+
+def _write_sheet_dataframe(
+    ws,
+    df: pd.DataFrame,
+    headers: list[str],
+) -> None:
+    """Clear body and write dataframe rows aligned to headers (row 1 kept/set)."""
+    if ws.max_row > 1:
+        ws.delete_rows(2, ws.max_row - 1)
+    for col_idx, label in enumerate(headers, start=1):
+        ws.cell(row=1, column=col_idx, value=label)
+    if df.empty:
+        return
+    for row_idx, row in enumerate(df.itertuples(index=False, name=None), start=2):
+        for col_idx, cell_value in enumerate(row, start=1):
+            ws.cell(row=row_idx, column=col_idx, value=_excel_cell_value(cell_value))
+
+
+def filter_template_no_po(df: pd.DataFrame) -> pd.DataFrame:
+    """Purchasing Document blank AND Storage Location = BORD."""
+    if df.empty:
+        return df.copy()
+    empty = pd.Series([""] * len(df), index=df.index, dtype=object)
+    po_raw = df["Purchasing Document"] if "Purchasing Document" in df.columns else empty
+    sloc_raw = df["Storage Location"] if "Storage Location" in df.columns else empty
+    po_blank = _series_blank(po_raw)
+    bord = _norm(sloc_raw).fillna("").astype(str).str.upper().eq("BORD")
+    return df.loc[po_blank & bord].reset_index(drop=True)
+
+
+def build_template_no_po_frame(
+    result_df: pd.DataFrame,
+    no_po_headers: list[str],
+) -> pd.DataFrame:
+    """Map Data Template columns onto Template NO PO layout."""
+    out = pd.DataFrame(index=result_df.index)
+    # Prefer first occurrence when duplicate column labels exist
+    col_positions: dict[str, int] = {}
+    for i, c in enumerate(result_df.columns):
+        key = str(c).strip()
+        if key not in col_positions:
+            col_positions[key] = i
+    lower_positions: dict[str, int] = {}
+    for key, i in col_positions.items():
+        lower_positions.setdefault(key.lower(), i)
+
+    for header in no_po_headers:
+        label = str(header).strip() if header is not None else ""
+        aliases = NO_PO_COLUMN_ALIASES.get(label, (label,))
+        pos = None
+        for alias in aliases:
+            if alias in col_positions:
+                pos = col_positions[alias]
+                break
+            low = alias.lower()
+            if low in lower_positions:
+                pos = lower_positions[low]
+                break
+        if pos is None:
+            out[label] = ""
+        else:
+            series = result_df.iloc[:, pos]
+            if isinstance(series, pd.DataFrame):
+                series = series.iloc[:, 0]
+            out[label] = series
+    return out.reindex(
+        columns=[str(h).strip() if h is not None else "" for h in no_po_headers]
+    )
+
+
 def _write_bo_report_workbook(
     guide_path: Path,
     output_path: Path,
     result_df: pd.DataFrame,
     template_headers: list[str],
     output_headers: list[str],
+    no_po_df: pd.DataFrame | None = None,
+    no_po_headers: list[str] | None = None,
 ) -> None:
     """
     Write by copying the guide workbook (keeps Guide sheet + valid OOXML),
-    then fill Data Template. Avoids pandas ExcelWriter quirks that make Excel
-    open the file as 'Repaired'.
+    then fill Data Template and Template NO PO.
     """
     from openpyxl import load_workbook
 
@@ -657,30 +1065,33 @@ def _write_bo_report_workbook(
         raise ValueError(f"Sheet '{TEMPLATE_SHEET}' tidak ada di guide.")
     ws = wb[TEMPLATE_SHEET]
 
-    # Clear old body (keep row 1 headers)
-    if ws.max_row > 1:
-        ws.delete_rows(2, ws.max_row - 1)
+    _write_sheet_dataframe(
+        ws,
+        result_df.reindex(columns=template_headers),
+        output_headers,
+    )
 
-    # Ensure header row matches template labels
-    for col_idx, label in enumerate(output_headers, start=1):
-        ws.cell(row=1, column=col_idx, value=label)
+    # Template NO PO: always derive from result_df at write time
+    if TEMPLATE_NO_PO_SHEET in wb.sheetnames:
+        ws_no = wb[TEMPLATE_NO_PO_SHEET]
+        headers = [str(h).strip() for h in (no_po_headers or []) if h]
+        if not headers:
+            headers = [
+                str(cell.value).strip()
+                for cell in next(ws_no.iter_rows(min_row=1, max_row=1))
+                if cell.value is not None
+            ]
+        if not headers:
+            headers = list(NO_PO_COLUMN_ALIASES.keys())
+        frame = build_template_no_po_frame(filter_template_no_po(result_df), headers)
+        _write_sheet_dataframe(ws_no, frame.reindex(columns=headers), headers)
 
-    # Write data rows
-    values = result_df.reindex(columns=template_headers).to_numpy().tolist()
-    for row_idx, row in enumerate(values, start=2):
-        for col_idx, cell_value in enumerate(row, start=1):
-            if cell_value is None or (
-                isinstance(cell_value, float) and pd.isna(cell_value)
-            ):
-                ws.cell(row=row_idx, column=col_idx, value=None)
-            else:
-                ws.cell(row=row_idx, column=col_idx, value=cell_value)
-
-    # Drop accidental extra sheets pandas might have left in older outputs
+    # Keep guide sheets (Data Template, Guide, Estimasi & Remark, Template NO PO)
     for name in list(wb.sheetnames):
-        if name not in {TEMPLATE_SHEET, GUIDE_SHEET}:
+        if name not in GUIDE_KEEP_SHEETS:
             del wb[name]
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
     wb.close()
 
@@ -781,14 +1192,21 @@ def generate_bo_report(
     base["Manuf"] = _norm(base["Material No"]).astype(str).str[-2:]
     base.loc[_norm(base["Material No"]).isna(), "Manuf"] = ""
 
-    # --- PO Moni composite lookup ---
+    # --- PO Moni lookups (Guide: different keys per field) ---
     po_dir = project_root / "data-sap-zmpu_po_moni"
     po = _load_folder_frames(po_dir)
-    po_fields = {
+    # Key = Purchasing Document only
+    po_by_pd = {
         "PO Created Date": ["Document Date", "PO Created Date"],
-        header_po_qty: ["Order Quantity", "PO Quantity"],
         "Order Class": ["Order Class"],
         "Vendor/supplying plant": ["Vendor/supplying plant"],
+    }
+    # Key = SO + Item + Material + Purchasing Document (no Order Qty)
+    po_by_so_item_mat_pd = {
+        header_po_qty: ["Order Quantity", "PO Quantity"],
+    }
+    # Key = SO + Item + Material + Order Qty + Purchasing Document
+    po_by_full = {
         "Agreement Type": ["Agreement Type"],
         "Ship Out": ["Ship Out"],
         "Ship In": ["Ship In"],
@@ -797,9 +1215,14 @@ def generate_bo_report(
         "Shipment Number": ["Shipment Number"],
         "Shipment Number Date": ["Shipment Number Date"],
     }
+    all_po_targets = [
+        *po_by_pd.keys(),
+        *po_by_so_item_mat_pd.keys(),
+        *po_by_full.keys(),
+    ]
     if po.empty:
         missing_sources.append("data-sap-zmpu_po_moni")
-        for col in po_fields:
+        for col in all_po_targets:
             base[col] = ""
     else:
         so_c = find_column(po, ["Sales Order Number", "Sales Document", "Sales document"])
@@ -807,7 +1230,30 @@ def generate_bo_report(
         mat_c = find_column(po, ["Material", "Material No", "Material Number"])
         qty_c = find_column(po, ["Order Quantity"])
         pd_c = find_column(po, ["Purchasing Document"])
-        po_key = (
+
+        po_pd_key = _norm(po[pd_c]).fillna("")
+        base_pd_key = _norm(base["Purchasing Document"]).fillna("")
+
+        po_so_item_mat_pd = (
+            _norm(po[so_c]).fillna("")
+            + "|"
+            + _norm(po[item_c]).fillna("")
+            + "|"
+            + _norm(po[mat_c]).fillna("")
+            + "|"
+            + _norm(po[pd_c]).fillna("")
+        )
+        base_so_item_mat_pd = (
+            _norm(base["Sales document"]).fillna("")
+            + "|"
+            + _norm(base["Sales Document Item"]).fillna("")
+            + "|"
+            + _norm(base["Material No"]).fillna("")
+            + "|"
+            + _norm(base["Purchasing Document"]).fillna("")
+        )
+
+        po_full_key = (
             _norm(po[so_c]).fillna("")
             + "|"
             + _norm(po[item_c]).fillna("")
@@ -818,7 +1264,7 @@ def generate_bo_report(
             + "|"
             + _norm(po[pd_c]).fillna("")
         )
-        base_key = (
+        base_full_key = (
             _norm(base["Sales document"]).fillna("")
             + "|"
             + _norm(base["Sales Document Item"]).fillna("")
@@ -829,21 +1275,35 @@ def generate_bo_report(
             + "|"
             + _norm(base["Purchasing Document"]).fillna("")
         )
-        for target, candidates in po_fields.items():
-            value_col = _safe_col(po, candidates)
-            mapping: dict[str, str] = {}
-            if value_col:
-                for k, v in zip(po_key.tolist(), _norm(po[value_col]).tolist(), strict=False):
-                    if k and k not in mapping:
-                        mapping[k] = v
-            base[target] = base_key.map(lambda k, m=mapping: m.get(k, ""))
+
+        def _apply_po_maps(
+            field_map: dict[str, list[str]],
+            source_keys: pd.Series,
+            target_keys: pd.Series,
+        ) -> None:
+            for target, candidates in field_map.items():
+                value_col = _safe_col(po, candidates)
+                mapping: dict[str, str] = {}
+                if value_col:
+                    for k, v in zip(
+                        source_keys.tolist(),
+                        _norm(po[value_col]).tolist(),
+                        strict=False,
+                    ):
+                        if k and k not in mapping:
+                            mapping[k] = v
+                base[target] = target_keys.map(lambda k, m=mapping: m.get(k, ""))
+
+        _apply_po_maps(po_by_pd, po_pd_key, base_pd_key)
+        _apply_po_maps(po_by_so_item_mat_pd, po_so_item_mat_pd, base_so_item_mat_pd)
+        _apply_po_maps(po_by_full, po_full_key, base_full_key)
 
     # Plant.1 = LEFT(Vendor/supplying plant, 4)
     vendor = _norm(base.get("Vendor/supplying plant", pd.Series([""] * len(base))))
     base[header_plant_formula] = vendor.astype(str).str[:4]
     base.loc[vendor.isna() | (vendor == ""), header_plant_formula] = ""
 
-    # --- CPAvail by Material ---
+    # --- CPAvail by Material (base, strip :suffix) ---
     cp_dir = project_root / "data-sap-zmim_cpavail"
     cp = _load_folder_frames(cp_dir)
     cp_map_fields = {
@@ -852,54 +1312,87 @@ def generate_bo_report(
         "QNS": ["QNS (Queensland)", "QNS"],
         "SAG": ["SAG (Sagami)", "SAG"],
     }
+    base_mat_base = _material_base(base["Material No"])
     if cp.empty:
         missing_sources.append("data-sap-zmim_cpavail")
         for col in cp_map_fields:
             base[col] = ""
     else:
         mat_c = find_column(cp, ["Material", "Material Number", "Material No"])
+        cp_mat_base = _material_base(cp[mat_c])
         for target, candidates in cp_map_fields.items():
             value_col = _safe_col(cp, candidates)
-            mapping = {}
             if value_col:
-                for k, v in zip(_norm(cp[mat_c]).tolist(), _norm(cp[value_col]).tolist(), strict=False):
-                    if k and k not in mapping:
-                        mapping[k] = v
-            base[target] = _map_series(base["Material No"], mapping)
+                base[target] = _map_by_material_base(
+                    base_mat_base,
+                    cp_mat_base,
+                    _norm(cp[value_col]),
+                )
+            else:
+                base[target] = ""
 
-    # --- Stock info Order Method ---
+    # --- Stock info Order Method + plant 1G38 fields (Guide + Data Template) ---
     stock_dir = project_root / "data-sap-zmmm_stock_info"
     stock = _load_folder_frames(stock_dir)
+    stock_template_names = [
+        name
+        for aliases, _src in STOCK_1G38_FIELD_SPECS
+        for name in _template_targets(template_headers, aliases)
+    ]
+    stock_targets = ["Order Method", "1G38", *stock_template_names]
     if stock.empty:
         missing_sources.append("data-sap-zmmm_stock_info")
-        base["Order Method"] = ""
-        base["1G38"] = ""
+        for col in stock_targets:
+            base[col] = ""
     else:
         mat_c = find_column(stock, ["Material Number", "Material", "Material No"])
         method_c = _safe_col(stock, ["Order Method"])
         plant_c = _safe_col(stock, ["Plant"])
-        avail_c = _safe_col(
-            stock,
-            ["Total Availability (TA)", "On-hand Stock (ATP)", "On-hand Stock"],
-        )
-        mapping = {}
+        # Guide: 1G38 = On-hand Stock (ATP)
+        avail_c = _safe_col(stock, list(STOCK_QTY_CANDIDATES))
+        stock_mat_base = _material_base(stock[mat_c])
+
         if method_c:
-            for k, v in zip(_norm(stock[mat_c]).tolist(), _norm(stock[method_c]).tolist(), strict=False):
-                if k and k not in mapping:
-                    mapping[k] = v
-        base["Order Method"] = _map_series(base["Material No"], mapping)
-        mapping_1g38: dict[str, str] = {}
-        if plant_c and avail_c:
-            mask = _norm(stock[plant_c]) == "1G38"
-            sub = stock.loc[mask]
-            for k, v in zip(
-                _norm(sub[mat_c]).tolist(),
-                _norm(sub[avail_c]).tolist(),
-                strict=False,
-            ):
-                if k and k not in mapping_1g38:
-                    mapping_1g38[k] = v
-        base["1G38"] = _map_series(base["Material No"], mapping_1g38)
+            base["Order Method"] = _map_by_material_base(
+                base_mat_base,
+                stock_mat_base,
+                _norm(stock[method_c]),
+            )
+        else:
+            base["Order Method"] = ""
+
+        stock_1g38 = (
+            stock.loc[_norm(stock[plant_c]) == "1G38"]
+            if plant_c
+            else stock.iloc[0:0]
+        )
+        stock_1g38_mat = (
+            _material_base(stock_1g38[mat_c])
+            if not stock_1g38.empty
+            else pd.Series(dtype=object)
+        )
+        if avail_c is not None and not stock_1g38.empty:
+            base["1G38"] = _map_by_material_base(
+                base_mat_base,
+                stock_1g38_mat,
+                _norm(stock_1g38[avail_c]),
+            )
+        else:
+            base["1G38"] = ""
+
+        for aliases, source_cands in STOCK_1G38_FIELD_SPECS:
+            value_col = _safe_col(stock, list(source_cands))
+            mapped = (
+                _map_by_material_base(
+                    base_mat_base,
+                    stock_1g38_mat,
+                    _norm(stock_1g38[value_col]),
+                )
+                if value_col is not None and not stock_1g38.empty
+                else pd.Series([""] * len(base), index=base.index)
+            )
+            for target in _template_targets(template_headers, aliases):
+                base[target] = mapped
 
     # --- PartViz lookups (material base + cust ref) ---
     partviz_path = project_root / "output" / "partviz_merged.xlsx"
@@ -988,7 +1481,7 @@ def generate_bo_report(
                 mapping[k] = v
         base["ETA D"] = _map_series(base["RMS ETA"], mapping)
 
-    # --- Hub stock by Material + Plant code columns ---
+    # --- Hub stock by Material base + Plant (Guide: On-hand Stock ATP) ---
     hub_dir = project_root / "data-sap-zmmm_stock_info-hub"
     hub = _load_folder_frames(hub_dir)
     hub_plants = ["1S67", "1S66", "1S76", "1S81"]
@@ -999,23 +1492,16 @@ def generate_bo_report(
     else:
         mat_c = find_column(hub, ["Material Number", "Material", "Material No"])
         plant_c = find_column(hub, ["Plant"])
-        value_c = _safe_col(
-            hub,
-            ["Total Availability (TA)", "On-hand Stock (ATP)", "On-hand Stock"],
-        )
+        value_c = _safe_col(hub, list(STOCK_QTY_CANDIDATES))
+        hub_mat_base = _material_base(hub[mat_c])
         for plant in hub_plants:
-            mapping: dict[str, str] = {}
             if value_c:
                 mask = _norm(hub[plant_c]) == plant
-                sub = hub.loc[mask]
-                for k, v in zip(
-                    _norm(sub[mat_c]).tolist(),
-                    _norm(sub[value_c]).tolist(),
-                    strict=False,
-                ):
-                    if k and k not in mapping:
-                        mapping[k] = v
-            base[plant] = _map_series(base["Material No"], mapping)
+                sub_keys = hub_mat_base.loc[mask]
+                sub_vals = _norm(hub.loc[mask, value_c])
+                base[plant] = _map_by_material_base(base_mat_base, sub_keys, sub_vals)
+            else:
+                base[plant] = ""
 
     # --- BO last Estimasi before / Remaks before ---
     bo_dir = project_root / "data-bo-last"
@@ -1047,10 +1533,12 @@ def generate_bo_report(
                         mapping[k] = v
             base[target] = base_bo_key.map(lambda k: mapping.get(k, ""))
 
-    # Empty guide fields
+    # Empty guide fields (filled later by rules)
     if "Estimasi" not in base.columns:
         base["Estimasi"] = ""
-    if "Remaks" not in base.columns:
+    if "Remark" not in base.columns:
+        base["Remark"] = ""
+    if "Remaks" not in base.columns and "Remaks" in template_headers:
         base["Remaks"] = ""
     if "Action" not in base.columns:
         base["Action"] = ""
@@ -1064,7 +1552,31 @@ def generate_bo_report(
     result_df, excluded_exact_duplicate_count = filter_remove_duplicates(result_df)
     result_df, excluded_duplicate_count = filter_order_qty_eq_total_od(result_df)
     result_df = apply_action_rules(result_df)
+    result_df = apply_estimasi_remark_rules(result_df)
     result_df = _sanitize_result_for_excel(result_df, NUMERIC_OUTPUT_COLUMNS)
+
+    # Template NO PO headers + filtered rows (PO blank + SLOC BORD)
+    no_po_headers: list[str] = []
+    try:
+        from openpyxl import load_workbook
+
+        wb_no = load_workbook(guide_path, read_only=True, data_only=True)
+        if TEMPLATE_NO_PO_SHEET in wb_no.sheetnames:
+            ws_no = wb_no[TEMPLATE_NO_PO_SHEET]
+            no_po_headers = [
+                str(cell.value).strip()
+                for cell in next(ws_no.iter_rows(min_row=1, max_row=1))
+                if cell.value is not None
+            ]
+        wb_no.close()
+    except Exception:  # noqa: BLE001
+        no_po_headers = list(NO_PO_COLUMN_ALIASES.keys())
+    if not no_po_headers:
+        no_po_headers = list(NO_PO_COLUMN_ALIASES.keys())
+    no_po_df = build_template_no_po_frame(
+        filter_template_no_po(result_df),
+        no_po_headers,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / OUTPUT_BO_REPORT
@@ -1074,6 +1586,8 @@ def generate_bo_report(
         result_df=result_df,
         template_headers=template_headers,
         output_headers=output_headers,
+        no_po_df=no_po_df,
+        no_po_headers=no_po_headers,
     )
 
     preview_cols = [
